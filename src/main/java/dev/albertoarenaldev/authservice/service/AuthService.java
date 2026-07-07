@@ -130,7 +130,7 @@ public class AuthService {
                 .orElseThrow(() -> new InvalidCredentialsException());
 
         boolean passwordOk = passwordEncoder.matches(req.password(), user.getPasswordHash());
-        if (!passwordOk || !Boolean.TRUE.equals(user.getEnabled())) {
+        if (!passwordOk || !user.isEnabled()) {
             log.warn("Failed login attempt for email={}", req.email());
             throw new InvalidCredentialsException();
         }

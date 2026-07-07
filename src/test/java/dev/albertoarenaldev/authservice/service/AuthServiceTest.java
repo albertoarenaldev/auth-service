@@ -109,7 +109,7 @@ class AuthServiceTest {
         User saved = userCaptor.getValue();
         assertThat(saved.getPasswordHash()).isEqualTo("hashed-password");
         assertThat(saved.getPasswordHash()).isNotEqualTo(req.password());
-        assertThat(saved.getEnabled()).isTrue();
+        assertThat(saved.isEnabled()).isTrue();
         assertThat(saved.getRoles()).extracting(Role::getName).containsExactly("ROLE_USER");
     }
 
