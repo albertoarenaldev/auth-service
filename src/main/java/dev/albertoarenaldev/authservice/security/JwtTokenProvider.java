@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Date;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Genera y valida access tokens (JWT) usando JJWT 0.12.5.
@@ -73,20 +74,34 @@ public class JwtTokenProvider {
     }
 
     /**
-     * Valida firma + expiración del token. Devuelve {@code true} si es válido.
-     * Captura todas las excepciones de JJWT y loguea a nivel WARN.
+     * Valida firma + expiración del token y devuelve los claims en un solo
+     * parse. Devuelve {@link Optional#empty()} si el token es invalido
+     * (firma incorrecta, expirado, malformado).
+     *
+     * <p>Usar este metodo cuando se necesitan los claims despues de validar
+     * (caso tipico: el filtro de autenticacion). Asi se evita parsear el
+     * token 2 o 3 veces seguidas.
      */
-    public boolean validateToken(String token) {
+    public Optional<Claims> validateAndGetClaims(String token) {
         try {
-            Jwts.parser()
+            Claims claims = Jwts.parser()
                     .verifyWith(signingKey)
                     .build()
-                    .parseSignedClaims(token);
-            return true;
+                    .parseSignedClaims(token)
+                    .getPayload();
+            return Optional.of(claims);
         } catch (JwtException | IllegalArgumentException e) {
             log.warn("Invalid JWT token: {}", e.getMessage());
-            return false;
+            return Optional.empty();
         }
+    }
+
+    /**
+     * Valida firma + expiración del token. Devuelve {@code true} si es válido.
+     * Convenience method que delega en {@link #validateAndGetClaims(String)}.
+     */
+    public boolean validateToken(String token) {
+        return validateAndGetClaims(token).isPresent();
     }
 
     /**
