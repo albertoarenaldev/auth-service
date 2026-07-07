@@ -85,8 +85,11 @@ public class AuthService {
             throw new EmailAlreadyExistsException(req.email());
         }
 
+        // El rol por defecto (ROLE_USER) es creado por DataSeeder al arranque.
+        // Si no existe, es un bug de configuracion (DataSeeder no se ejecuto).
         Role defaultRole = roleRepository.findByName(DEFAULT_ROLE_NAME)
-                .orElseGet(() -> roleRepository.save(new Role(DEFAULT_ROLE_NAME)));
+                .orElseThrow(() -> new IllegalStateException(
+                        "Default role " + DEFAULT_ROLE_NAME + " not found. DataSeeder should have created it on startup."));
 
         User user = new User();
         user.setEmail(req.email());
