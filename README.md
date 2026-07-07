@@ -1,10 +1,5 @@
 # auth-service
 
-<!--
-  IMPORTANTE: Reemplaza albertoarenaldev/auth-service por tu
-  URL real de GitHub despues de hacer `git push -u origin main`. El badge
-  de CI se actualizara solo en cada push/PR.
--->
 [![CI](https://github.com/albertoarenaldev/auth-service/actions/workflows/ci.yml/badge.svg)](https://github.com/albertoarenaldev/auth-service/actions/workflows/ci.yml)
 [![Java](https://img.shields.io/badge/Java-21-ED8B00?logo=openjdk&logoColor=white)](https://www.oracle.com/java/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5.5-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
