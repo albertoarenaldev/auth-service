@@ -13,7 +13,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -65,6 +67,14 @@ class SecurityConfigTest {
     }
 
     @Test
+    void actuatorInfo_isProtected_returns401WithoutToken() throws Exception {
+        // /actuator/info puede leakear metadata del build (info.app.name, etc.),
+        // por eso va a authenticated() y no a permitAll().
+        mockMvc.perform(get("/actuator/info"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
     void protectedEndpoint_withoutToken_returns401WithJsonBody() throws Exception {
         mockMvc.perform(get("/api/v1/users/me"))
                 .andExpect(status().isUnauthorized())
@@ -93,5 +103,15 @@ class SecurityConfigTest {
                         .header("Authorization", "Bearer not.a.valid.jwt"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.error").value("Unauthorized"));
+    }
+
+    @Test
+    void unauthorizedResponse_includesBearerAuthenticateHeader() throws Exception {
+        // RFC 6750: cualquier 401 en una API con Bearer debe llevar el header
+        // WWW-Authenticate para que clientes/proxies detecten el esquema.
+        mockMvc.perform(get("/api/v1/users/me"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().exists("WWW-Authenticate"))
+                .andExpect(header().string("WWW-Authenticate", containsString("Bearer")));
     }
 }

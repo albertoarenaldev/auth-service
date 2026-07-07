@@ -30,6 +30,10 @@ import java.util.Map;
  *
  * <p>Se activa cuando un endpoint protegido se accede sin autenticación
  * válida (filtro JWT no populó el SecurityContext, o el token era inválido).
+ *
+ * <p>Incluye el header {@code WWW-Authenticate: Bearer realm="auth-service"}
+ * según <a href="https://datatracker.ietf.org/doc/html/rfc6750">RFC 6750</a>:
+ * clientes y proxies lo usan para detectar el esquema de autenticación.
  */
 @Component
 public class JwtAuthenticationEntryPoint implements AuthenticationEntryPoint {
@@ -44,6 +48,9 @@ public class JwtAuthenticationEntryPoint implements AuthenticationEntryPoint {
     public void commence(HttpServletRequest request,
                          HttpServletResponse response,
                          AuthenticationException authException) throws IOException {
+        // RFC 6750: cualquier 401 en una API con Bearer tokens DEBE llevar
+        // el header WWW-Authenticate para que clientes/proxies sepan el esquema.
+        response.setHeader("WWW-Authenticate", "Bearer realm=\"auth-service\"");
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
 

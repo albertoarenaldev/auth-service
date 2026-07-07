@@ -16,7 +16,6 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
-import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -25,7 +24,8 @@ import java.util.List;
  * <p>Reglas de autorización:
  * <ul>
  *   <li>{@code /api/v1/auth/**} — público (register, login, refresh, health)</li>
- *   <li>{@code /actuator/health} y {@code /actuator/info} — público</li>
+ *   <li>{@code /actuator/health} — público (load balancers, monitoring)</li>
+ *   <li>{@code /actuator/info} — protegido (puede leakear metadata del build)</li>
  *   <li>Resto — requiere JWT válido en el header {@code Authorization}</li>
  * </ul>
  *
@@ -54,7 +54,7 @@ public class SecurityConfig {
                 .exceptionHandling(ex -> ex.authenticationEntryPoint(authenticationEntryPoint))
                 .sessionManagement(sess -> sess.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(authz -> authz
-                        .requestMatchers("/api/v1/auth/**", "/actuator/health", "/actuator/info").permitAll()
+                        .requestMatchers("/api/v1/auth/**", "/actuator/health").permitAll()
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
@@ -66,7 +66,10 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource(
             @Value("${app.cors.origins}") String corsOrigins) {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(Arrays.asList(corsOrigins.split(",")));
+        config.setAllowedOrigins(java.util.Arrays.stream(corsOrigins.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toList());
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
         config.setAllowCredentials(true);
