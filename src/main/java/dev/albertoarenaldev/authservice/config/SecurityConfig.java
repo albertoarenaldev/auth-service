@@ -16,6 +16,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -66,7 +67,7 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource(
             @Value("${app.cors.origins}") String corsOrigins) {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(java.util.Arrays.stream(corsOrigins.split(","))
+        config.setAllowedOrigins(Arrays.stream(corsOrigins.split(","))
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
                 .toList());
