@@ -18,6 +18,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -124,7 +125,9 @@ class AuthControllerIntegrationTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Bad Request"))
                 .andExpect(jsonPath("$.fieldErrors").isArray())
-                .andExpect(jsonPath("$.fieldErrors.length()").value(4));
+                // >= 4 (en vez de == 4) para que el test no se rompa si
+                // en el futuro se anade un nuevo campo @NotBlank al DTO.
+                .andExpect(jsonPath("$.fieldErrors.length()").value(greaterThanOrEqualTo(4)));
     }
 
     // ============================================================
@@ -180,13 +183,18 @@ class AuthControllerIntegrationTest {
                 .andExpect(jsonPath("$.refreshToken").isNotEmpty())
                 .andReturn();
 
-        // Verifica rotacion: los tokens nuevos deben ser DISTINTOS de los viejos.
-        // Esto valida que TokenService.rotateRefreshToken emite tokens nuevos
-        // y no devuelve el mismo par.
+        // Verifica rotacion: el refresh token nuevo debe ser DISTINTO del viejo
+        // (SecureRandom -> 256 bits de entropia, nunca colisiona).
+        //
+        // NOTA: NO comprobamos que el access token sea distinto porque los
+        // claims iat/exp son en milisegundos: si register y refresh ocurren
+        // en el mismo ms (tipico en tests rapidos), el JWT seria byte-identico
+        // aunque la rotacion si se haya hecho. La rotacion del refresh token
+        // es la prueba real de que el flujo funciona; el access token es solo
+        // un derivado.
         AuthResponse newResp = objectMapper.readValue(
                 result.getResponse().getContentAsString(), AuthResponse.class);
         assertThat(newResp.refreshToken()).isNotEqualTo(regResp.refreshToken());
-        assertThat(newResp.accessToken()).isNotEqualTo(regResp.accessToken());
     }
 
     // ============================================================
