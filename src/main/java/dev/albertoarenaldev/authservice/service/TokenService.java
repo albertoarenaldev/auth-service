@@ -42,7 +42,7 @@ import java.util.Base64;
  *
  * <p><b>Por que SHA-256 y no BCrypt para hashear refresh tokens:</b>
  * BCrypt es deliberadamente lento (~250ms) para frustrar fuerza bruta
- * sobre passwords debiles. Los refresh tokens tienen 256 bits de entropia
+ * sobre contraseñas débiles. Los refresh tokens tienen 256 bits de entropía
  * (fuerza bruta imposible), asi que la lentitud de BCrypt solo aniadiria
  * latencia innecesaria a cada peticion de refresh. SHA-256 es ~1us y
  * suficiente.
@@ -98,7 +98,7 @@ public class TokenService {
      *         lo vera; la BD solo guarda el hash.
      */
     @Transactional
-    public String issueRefreshToken(User user) {
+    public String generateRefreshToken(User user) {
         String rawToken = generateRawToken();
         String hash = hashToken(rawToken);
         Instant now = Instant.now();
@@ -146,7 +146,7 @@ public class TokenService {
         if (old.isRevoked() && old.getReplacedByTokenId() != null) {
             log.warn("Refresh token reuse detected for user id={} - revoking entire family",
                     old.getUser().getId());
-            refreshTokenRepository.revokeAllByUserId(old.getUser().getId(), Instant.now());
+            this.revokeAllForUser(old.getUser().getId());
             throw new InvalidTokenException("Refresh token reuse detected. All sessions revoked.");
         }
 
@@ -175,7 +175,7 @@ public class TokenService {
         String newAccess = jwtTokenProvider.generateAccessToken(old.getUser());
 
         log.debug("Rotated refresh token for user id={}", old.getUser().getId());
-        return new TokenPair(newAccess, newRaw);
+        return new TokenPair(newAccess, newRaw, old.getUser());
     }
 
     /**
@@ -248,8 +248,13 @@ public class TokenService {
     }
 
     /**
-     * Par (access token, refresh token) emitido tras un login o un refresh
-     * exitoso. Record inmutable.
+     * Par (access token, refresh token, User) emitido tras un login o un
+     * refresh exitoso. Record inmutable.
+     *
+     * <p>Se incluye el {@link User} para que el caller (tipicamente
+     * {@code AuthService}) pueda construir el {@code UserResponse} del
+     * {@code AuthResponse} sin tener que hacer un lookup extra en la DB:
+     * el User ya se cargo al validar el refresh token viejo.</p>
      */
-    public record TokenPair(String accessToken, String refreshToken) {}
+    public record TokenPair(String accessToken, String refreshToken, User user) {}
 }
