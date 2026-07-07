@@ -169,9 +169,10 @@ class TokenServiceTest {
         when(refreshTokenRepository.findByTokenHash(any())).thenReturn(Optional.of(old));
         when(refreshTokenRepository.revokeAllByUserId(anyLong(), any(Instant.class))).thenReturn(3);
 
+        // Mensaje generico: ya no leakamos la razon (reuse vs revoked) al cliente.
+        // La deteccion de reuse se verifica via el side effect (revokeAllByUserId).
         assertThatThrownBy(() -> tokenService.rotateRefreshToken("raw-old-token"))
-                .isInstanceOf(InvalidTokenException.class)
-                .hasMessageContaining("reuse");
+                .isInstanceOf(InvalidTokenException.class);
 
         // Mitigacion: se revocan TODOS los tokens activos del usuario
         verify(refreshTokenRepository).revokeAllByUserId(anyLong(), any(Instant.class));

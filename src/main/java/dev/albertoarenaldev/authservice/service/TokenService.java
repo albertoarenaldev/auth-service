@@ -135,7 +135,7 @@ public class TokenService {
     public TokenPair rotateRefreshToken(String rawOldToken) {
         String oldHash = hashToken(rawOldToken);
         RefreshToken old = refreshTokenRepository.findByTokenHash(oldHash)
-                .orElseThrow(() -> new InvalidTokenException("Refresh token not found"));
+                .orElseThrow(() -> new InvalidTokenException("Invalid refresh token"));
 
         // --- Validacion de estado ---
         if (old.isRevoked()) {
@@ -148,17 +148,19 @@ public class TokenService {
                 log.warn("Refresh token reuse detected for user id={} - revoking entire family",
                         old.getUser().getId());
                 this.revokeAllForUser(old.getUser().getId());
-                throw new InvalidTokenException("Refresh token reuse detected. All sessions revoked.");
+                // Mensaje generico para no leakear al cliente la razon del fallo.
+                // El log.warn de arriba mantiene la distincion server-side.
+                throw new InvalidTokenException("Invalid refresh token");
             }
             // Token revocado manualmente (logout, logout global, etc.) pero
             // NO rotado. El cliente intento reusar un refresh token que ya
             // cerro sesion: debe fallar.
-            throw new InvalidTokenException("Refresh token revoked");
+            throw new InvalidTokenException("Invalid refresh token");
         }
 
         // --- Expiration check ---
         if (old.isExpired()) {
-            throw new InvalidTokenException("Refresh token expired");
+            throw new InvalidTokenException("Invalid refresh token");
         }
 
         // --- Emit new refresh token ---
