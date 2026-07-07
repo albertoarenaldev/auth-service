@@ -1,0 +1,46 @@
+# =====================================================================
+# CI — Auth Service
+# =====================================================================
+# Corre `mvn -B verify` (compile + test + package) en cada push y
+# pull_request a `main`. Usa Temurin JDK 21 (la version del proyecto).
+#
+# Optimizaciones:
+#   - `cache: maven` en setup-java evita descargar dependencias en cada run
+#   - `concurrency` cancela runs redundantes en pushes sucesivos
+#   - `timeout-minutes: 15` protege contra jobs colgados
+#   - `permissions: contents: read` aplica least-privilege
+# =====================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Verify (compile + test + package)
+        run: mvn -B verify
