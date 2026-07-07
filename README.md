@@ -33,11 +33,11 @@
 | **Fase 1** — Setup | ✅ | Spring Boot 3.5.5 + Java 21 + JPA + H2 + PostgreSQL + JJWT + BCrypt |
 | **Fase 2** — Data model | ✅ | User, Role, RefreshToken, PasswordResetToken + tests (13 tests) |
 | **Fase 3** — Security infra | ✅ | JwtProperties, JwtTokenProvider, JwtAuthenticationFilter, JwtAuthenticationEntryPoint, SecurityConfig, PasswordEncoderConfig (16 tests) |
-| **Fase 4** — Endpoints | ⏳ | register, login, refresh (placeholder actual: `GET /api/v1/auth/health`) |
+| **Fase 4** — Endpoints | ✅ | register, login, refresh, logout + TokenService con rotacion, reuse detection y revocacion de familia (15 tests nuevos: 7 integracion + 8 unitarios) |
 | **Fase 5** — Password reset | ⏳ | Flujo completo con email token + endpoint público |
 | **Fase 6** — User profile | ⏳ | `GET/PUT /api/v1/users/me`, change password |
 
-**Tests:** 29/29 verde · **Java:** 21 · **Spring Boot:** 3.5.5
+**Tests:** 44/44 verde · **Java:** 21 · **Spring Boot:** 3.5.5
 
 ---
 
@@ -116,6 +116,10 @@ Claims del JWT:
 | Método | Path | Auth | Descripción |
 |---|---|---|---|
 | `GET` | `/api/v1/auth/health` | público | Health check del módulo auth. Devuelve `{"status":"UP"}` |
+| `POST` | `/api/v1/auth/register` | público | Crear cuenta: `{email, password, firstName, lastName}` → 201 + `{accessToken, refreshToken, user}` |
+| `POST` | `/api/v1/auth/login` | público | Login: `{email, password}` → 200 + `{accessToken, refreshToken, user}`. 401 generico para evitar user enumeration |
+| `POST` | `/api/v1/auth/refresh` | público | Rotar refresh token: `{refreshToken}` → 200 + nuevos tokens. Deteccion de reuso + revocacion de familia |
+| `POST` | `/api/v1/auth/logout` | público | Revocar refresh token: `{refreshToken}` → 204 No Content. Idempotente |
 | `GET` | `/actuator/health` | público | Health check agregado (DB, disk, mail) |
 | `GET` | `/actuator/info` | 🔒 autenticado | Metadata del build (protegido para evitar info leak) |
 
@@ -123,10 +127,6 @@ Claims del JWT:
 
 | Método | Path | Auth | Descripción |
 |---|---|---|---|
-| `POST` | `/api/v1/auth/register` | público | Crear cuenta: `{email, password, firstName, lastName}` |
-| `POST` | `/api/v1/auth/login` | público | Login: `{email, password}` → `{accessToken, refreshToken, user}` |
-| `POST` | `/api/v1/auth/refresh` | público | Renovar access token con refresh token válido |
-| `POST` | `/api/v1/auth/logout` | 🔒 autenticado | Revocar refresh token (logout) |
 | `POST` | `/api/v1/auth/password/reset/request` | público | Solicitar email de reset |
 | `POST` | `/api/v1/auth/password/reset/confirm` | público | Confirmar reset con token |
 | `GET` | `/api/v1/users/me` | 🔒 autenticado | Perfil del usuario actual |
@@ -178,6 +178,32 @@ La app arranca en `http://localhost:8080`.
 curl http://localhost:8080/api/v1/auth/health
 # → {"status":"UP"}
 
+# Register — crear cuenta nueva (devuelve 201 + par de tokens)
+curl -X POST http://localhost:8080/api/v1/auth/register \
+     -H "Content-Type: application/json" \
+     -d '{"email":"alice@example.com","password":"S3cret!pwd","firstName":"Alice","lastName":"Doe"}'
+# → 201 Created
+# → {"accessToken":"eyJ...","refreshToken":"...","user":{"id":1,"email":"alice@example.com",...}}
+
+# Login — autenticar (devuelve 200 + par de tokens)
+curl -X POST http://localhost:8080/api/v1/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"email":"alice@example.com","password":"S3cret!pwd"}'
+# → 200 OK
+# → {"accessToken":"eyJ...","refreshToken":"...","user":{...}}
+
+# Refresh — rotar refresh token (el viejo se invalida, se emite uno nuevo)
+curl -X POST http://localhost:8080/api/v1/auth/refresh \
+     -H "Content-Type: application/json" \
+     -d '{"refreshToken":"<pegar-refresh-token-del-login>"}'
+# → 200 OK + nuevos tokens (rotacion atomica)
+
+# Logout — revocar refresh token (idempotente: no falla si ya estaba revocado)
+curl -X POST http://localhost:8080/api/v1/auth/logout \
+     -H "Content-Type: application/json" \
+     -d '{"refreshToken":"<refresh-token>"}'
+# → 204 No Content
+
 # Endpoint protegido sin token — debe dar 401
 curl -i http://localhost:8080/api/v1/users/me
 # → HTTP/1.1 401 Unauthorized
@@ -207,7 +233,7 @@ mvn -B test -Dtest='*RepositoryTest'
 mvn -B test -X
 ```
 
-**Cobertura actual:** 29 tests · 100% passing · 0 flaky
+**Cobertura actual:** 44 tests · 100% passing · 0 flaky
 
 **Perfiles de test:**
 - `@DataJpaTest` — tests de repositorios con H2 aislada (UUID por test)
@@ -330,7 +356,7 @@ auth-service/
 | **Fase 1** | ✅ | Setup del proyecto + perfiles + dependencias |
 | **Fase 2** | ✅ | Modelo de datos + repositorios + tests |
 | **Fase 3** | ✅ | Infraestructura JWT (filter, entry point, BCrypt, security config) |
-| **Fase 4** | ⏳ | Endpoints de auth (register, login, refresh, logout) |
+| **Fase 4** | ✅ | Endpoints de auth (register, login, refresh, logout) |
 | **Fase 5** | ⏳ | Password reset flow (request + confirm con email) |
 | **Fase 6** | ⏳ | User profile endpoints + change password |
 | **Fase 7** | ⏳ | Rate limiting (login attempts, password reset) |
