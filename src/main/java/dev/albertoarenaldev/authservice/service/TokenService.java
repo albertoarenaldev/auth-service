@@ -137,17 +137,23 @@ public class TokenService {
         RefreshToken old = refreshTokenRepository.findByTokenHash(oldHash)
                 .orElseThrow(() -> new InvalidTokenException("Refresh token not found"));
 
-        // --- Reuse detection ---
-        // Token revocado Y con replacedByTokenId != null significa que ya fue
-        // rotado por una peticion de refresh anterior. Un reuso aqui indica
-        // que el legitimo usuario YA uso este token (o que un atacante lo
-        // uso primero y el legitimo lo intento despues). En cualquier caso,
-        // la familia esta comprometida.
-        if (old.isRevoked() && old.getReplacedByTokenId() != null) {
-            log.warn("Refresh token reuse detected for user id={} - revoking entire family",
-                    old.getUser().getId());
-            this.revokeAllForUser(old.getUser().getId());
-            throw new InvalidTokenException("Refresh token reuse detected. All sessions revoked.");
+        // --- Validacion de estado ---
+        if (old.isRevoked()) {
+            if (old.getReplacedByTokenId() != null) {
+                // Reuso: el token ya fue rotado por una peticion de refresh
+                // anterior. Un reuso aqui indica que el legitimo usuario YA
+                // uso este token (o que un atacante lo uso primero y el
+                // legitimo lo intento despues). En cualquier caso, la familia
+                // esta comprometida: revocamos TODOS los tokens del usuario.
+                log.warn("Refresh token reuse detected for user id={} - revoking entire family",
+                        old.getUser().getId());
+                this.revokeAllForUser(old.getUser().getId());
+                throw new InvalidTokenException("Refresh token reuse detected. All sessions revoked.");
+            }
+            // Token revocado manualmente (logout, logout global, etc.) pero
+            // NO rotado. El cliente intento reusar un refresh token que ya
+            // cerro sesion: debe fallar.
+            throw new InvalidTokenException("Refresh token revoked");
         }
 
         // --- Expiration check ---
