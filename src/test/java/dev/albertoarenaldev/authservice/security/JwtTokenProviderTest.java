@@ -87,9 +87,20 @@ class JwtTokenProviderTest {
     @Test
     void validateToken_returnsFalse_forTamperedSignature() {
         String token = tokenProvider.generateAccessToken(testUser);
-        char last = token.charAt(token.length() - 1);
-        char replacement = (last == 'A') ? 'B' : 'A';
-        String tampered = token.substring(0, token.length() - 1) + replacement;
+        // Cambiamos un caracter del MEDIO de la firma (no el ultimo) para
+        // evitar el edge case del ultimo caracter de Base64 URL-safe:
+        // el cambio original a 'A'/'B' era flaky porque el reemplazo
+        // podia coincidir con un valor valido en algunos HMAC. El
+        // caracter del medio siempre es parte significativa de la firma
+        // decodificada (no es un bit de padding/edge).
+        int sigStart = token.lastIndexOf('.') + 1;
+        int sigLen = token.length() - sigStart;
+        int midOffset = sigLen / 2;
+        char midChar = token.charAt(sigStart + midOffset);
+        char replacement = (midChar == 'X') ? 'Y' : 'X';
+        String tampered = token.substring(0, sigStart + midOffset)
+                        + replacement
+                        + token.substring(sigStart + midOffset + 1);
 
         assertThat(tokenProvider.validateToken(tampered))
                 .as("Un token con la firma modificada no debe ser válido")

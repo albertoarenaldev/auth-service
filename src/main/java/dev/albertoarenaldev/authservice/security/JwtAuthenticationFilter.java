@@ -1,5 +1,6 @@
 package dev.albertoarenaldev.authservice.security;
 
+import io.jsonwebtoken.Claims;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -15,6 +16,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Filtro que extrae el JWT del header {@code Authorization: Bearer XXX},
@@ -26,6 +28,10 @@ import java.util.List;
  * deja pasar la request sin autenticar — Spring Security rechazará con
  * 401 (vía {@link JwtAuthenticationEntryPoint}) si el endpoint requiere
  * autenticación.
+ *
+ * <p>Optimización: usa {@link JwtTokenProvider#validateAndGetClaims(String)}
+ * para parsear el token UNA SOLA VEZ por request (antes se parseaba 3 veces:
+ * una en validateToken, otra en getEmailFromToken, otra en getRolesFromToken).
  *
  * <p>Se ejecuta una vez por request (OncePerRequestFilter), antes del
  * {@code UsernamePasswordAuthenticationFilter} de Spring Security.
@@ -50,10 +56,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         String token = extractToken(request);
 
-        if (StringUtils.hasText(token) && tokenProvider.validateToken(token)) {
-            String email = tokenProvider.getEmailFromToken(token);
-            List<String> roles = tokenProvider.getRolesFromToken(token);
-            authenticate(request, email, roles);
+        if (StringUtils.hasText(token)) {
+            // Un solo parse del token: valida Y extrae claims en la misma llamada.
+            Optional<Claims> maybeClaims = tokenProvider.validateAndGetClaims(token);
+            if (maybeClaims.isPresent()) {
+                Claims claims = maybeClaims.get();
+                String email = claims.getSubject();
+                List<String> roles = extractRoles(claims);
+                authenticate(request, email, roles);
+            }
         }
 
         filterChain.doFilter(request, response);
@@ -65,6 +76,20 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             return header.substring(BEARER_PREFIX.length());
         }
         return null;
+    }
+
+    /**
+     * Extrae el claim {@code roles} de los claims ya parseados. Devuelve
+     * lista vacia si el claim no existe o no es una lista (defensa contra
+     * tokens malformados).
+     */
+    @SuppressWarnings("unchecked")
+    private List<String> extractRoles(Claims claims) {
+        Object rolesClaim = claims.get("roles");
+        if (rolesClaim instanceof List<?> list) {
+            return (List<String>) list;
+        }
+        return List.of();
     }
 
     private void authenticate(HttpServletRequest request, String email, List<String> roles) {
