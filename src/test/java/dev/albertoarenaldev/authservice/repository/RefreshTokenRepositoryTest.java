@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
-import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.ActiveProfiles;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -32,11 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * </ul>
  */
 @DataJpaTest
-@TestPropertySource(properties = {
-        // H2 único para este test, evitando compartir la H2 en memoria
-        // (jdbc:h2:mem:authdb) con el smoke test (AuthServiceApplicationTests).
-        "spring.datasource.url=jdbc:h2:mem:repo-test;DB_CLOSE_DELAY=-1"
-})
+@ActiveProfiles("test")
 class RefreshTokenRepositoryTest {
 
     @Autowired

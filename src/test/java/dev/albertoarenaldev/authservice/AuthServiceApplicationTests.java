@@ -19,7 +19,7 @@ import org.springframework.test.context.ActiveProfiles;
  * <p>Si falla, el problema está en la base del proyecto (entidades, configs, deps).
  */
 @SpringBootTest
-@ActiveProfiles("dev")
+@ActiveProfiles("test")
 class AuthServiceApplicationTests {
 
     @Test
