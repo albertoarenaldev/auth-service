@@ -26,13 +26,13 @@ services:
   # -------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
-    container_name: auth-service-postgres
+    container_name: ${CONTAINER_NAME:-auth-service}-postgres
     environment:
       POSTGRES_DB: authdb
       POSTGRES_USER: authuser
       POSTGRES_PASSWORD: authpass
     ports:
-      - "5432:5432"   # expuesto al host para que puedas usar psql/DBeaver/etc
+      - "${POSTGRES_PORT:-5432}:5432"   # expuesto al host para que puedas usar psql/DBeaver/etc
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -48,11 +48,11 @@ services:
   # MailHog — SMTP fake + web UI para visualizar los emails enviados
   # -------------------------------------------------------------------
   mailhog:
-    image: mailhog/mailhog:latest
-    container_name: auth-service-mailhog
+    image: mailhog/mailhog:v1.0.1
+    container_name: ${CONTAINER_NAME:-auth-service}-mailhog
     ports:
-      - "1025:1025"   # SMTP
-      - "8025:8025"   # Web UI: http://localhost:8025
+      - "${MAILHOG_SMTP_PORT:-1025}:1025"   # SMTP
+      - "${MAILHOG_WEB_PORT:-8025}:8025"   # Web UI: http://localhost:8025
     networks:
       - auth-network
 
@@ -68,7 +68,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: auth-service-app
+    container_name: ${CONTAINER_NAME:-auth-service}-app
     depends_on:
       postgres:
         condition: service_healthy   # espera a que pg_isready devuelva OK
@@ -103,7 +103,7 @@ services:
       # ---- Zona horaria UTC (consistencia de timestamps JWT/tokens/BD) ----
       TZ: UTC
     ports:
-      - "8080:8080"
+      - "${APP_PORT:-8080}:8080"
     restart: unless-stopped
     networks:
       - auth-network
@@ -114,9 +114,9 @@ services:
 
 volumes:
   postgres_data:
-    name: auth-service-postgres-data   # nombre fijo (sobrevive a `docker compose down`)
+    name: ${CONTAINER_NAME:-auth-service}-postgres-data   # nombre prefijado (sobrevive a `docker compose down`, permite instancias paralelas)
 
 networks:
   auth-network:
-    name: auth-service-network
+    name: ${CONTAINER_NAME:-auth-service}-network
     driver: bridge
