@@ -91,22 +91,61 @@ public class StrongPasswordValidator implements ConstraintValidator<StrongPasswo
     }
 
     /**
-     * Establece el umbral activo. Pensado para que
-     * {@code PasswordPolicyConfig} lo invoque en el arranque. Tambien
-     * lo usan los tests que quieren verificar el comportamiento con
-     * un threshold custom (e.g. setMinScore(4) para probar que
-     * passphrases de 4 palabras que pasan con threshold 3 ahora
-     * fallan con threshold 4).
+     * Establece el umbral activo. Pensado para uso INTERNO en este
+     * paquete:
+     * <ul>
+     *   <li>Los tests unitarios en este mismo paquete (e.g.
+     *       {@code StrongPasswordValidatorTest}) lo usan para verificar
+     *       el comportamiento con thresholds custom.</li>
+     *   <li>El bridge publico {@link #applyMinScoreFromConfig(int)} lo
+     *       invoca desde el arranque de la aplicacion.</li>
+     * </ul>
+     *
+     * <p>Por que package-private: limitar la superficie de mutacion
+     * del estado global del validator. Solo codigo en
+     * {@code dev.albertoarenaldev.authservice.validation} puede tocarlo,
+     * previniendo cambios accidentales desde otras partes del proyecto
+     * (controllers, services, etc.) que deberian usar la config externa
+     * ({@code app.security.password-policy.min-zxcvbn-score}) en vez de
+     * mutar el static directamente.
      *
      * @param score nuevo umbral, debe estar en [0, 4]
      * @throws IllegalArgumentException si score esta fuera de rango
      */
-    public static void setMinScore(int score) {
+    static void setMinScore(int score) {
         if (score < 0 || score > 4) {
             throw new IllegalArgumentException(
                     "minZxcvbnScore debe estar en [0, 4], se recibio: " + score);
         }
         minScore = score;
+    }
+
+    /**
+     * Bridge publico para que {@code PasswordPolicyConfig} (en otro
+     * paquete, {@code dev.albertoarenaldev.authservice.config}) pueda
+     * inicializar el umbral al arrancar la aplicacion.
+     *
+     * <p><b>Por que existe este bridge:</b> el validator NO es un
+     * bean de Spring (es un singleton del JSR-380 instanciado por el
+     * {@code ConstraintValidatorFactory}), asi que no podemos
+     * {@code @Autowired} la config desde el validator. El bridge
+     * permite que {@code PasswordPolicyConfig} (que SI es un bean de
+     * Spring) pase la config al validator.
+     *
+     * <p><b>Por que es separado de {@link #setMinScore(int)}:</b>
+     * para que el setter real quede package-private (limita la
+     * superficie de mutacion) y solo este bridge, con un nombre que
+     * explicita su proposito, sea publico. Codigo de produccion fuera
+     * de {@code PasswordPolicyConfig} NO debe llamar a este metodo:
+     * si necesitas tunear el threshold, cambia la property
+     * {@code app.security.password-policy.min-zxcvbn-score} en
+     * {@code application.properties} o via env var.
+     *
+     * @param score valor a aplicar (validado con el mismo rango [0, 4])
+     * @throws IllegalArgumentException si score esta fuera de rango
+     */
+    public static void applyMinScoreFromConfig(int score) {
+        setMinScore(score);
     }
 
     @Override

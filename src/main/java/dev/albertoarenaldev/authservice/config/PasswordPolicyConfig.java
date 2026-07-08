@@ -44,7 +44,10 @@ public class PasswordPolicyConfig {
     @PostConstruct
     public void applyPasswordPolicy() {
         int score = properties.getMinZxcvbnScore();
-        StrongPasswordValidator.setMinScore(score);
+        // Llamamos al bridge publico applyMinScoreFromConfig (no al
+        // setter package-private setMinScore) porque estamos en otro
+        // paquete. El bridge valida el rango y delega al setter.
+        StrongPasswordValidator.applyMinScoreFromConfig(score);
         log.info("Politica de contrasena aplicada: minZxcvbnScore={} (zxcvbn 0=trivial, 4=inquebrantable)",
                 score);
     }
