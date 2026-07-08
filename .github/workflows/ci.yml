@@ -1,12 +1,16 @@
 # =====================================================================
 # CI — Auth Service
 # =====================================================================
-# Corre `mvn -B verify` (compile + test + package) en cada push y
-# pull_request a `main`. Usa Temurin JDK 21 (la version del proyecto).
+# - En `main` corre `mvn -B verify` (compile + test + package + JaCoCo)
+#   porque `verify` es la fase que activa jacoco-maven-plugin y genera
+#   el informe HTML de cobertura bajo target/site/jacoco/.
+# - En feature branches (incluida `history-rewite`) corre `mvn -B clean
+#   test` para dar feedback rapido en cada PR sin pagar el coste de
+#   empaquetar ni generar el informe de cobertura.
 #
 # Optimizaciones:
-#   - `cache: maven` en setup-java evita descargar dependencias en cada run
-#   - `concurrency` cancela runs redundantes en pushes sucesivos
+#   - `cache: maven` en setup-java evita re-descargar dependencias en cada run
+#   - `concurrency` cancela runs redundantes en pushes sucesivos de la misma rama
 #   - `timeout-minutes: 15` protege contra jobs colgados
 #   - `permissions: contents: read` aplica least-privilege
 # =====================================================================
@@ -15,9 +19,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, history-rewite]
   pull_request:
-    branches: [main]
+    branches: [main, history-rewite]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -42,5 +46,10 @@ jobs:
           java-version: '21'
           cache: maven
 
-      - name: Verify (compile + test + package)
+      - name: Build and test (feature branches)
+        if: github.ref != 'refs/heads/main'
+        run: mvn -B clean test
+
+      - name: Verify and JaCoCo (main)
+        if: github.ref == 'refs/heads/main'
         run: mvn -B verify
