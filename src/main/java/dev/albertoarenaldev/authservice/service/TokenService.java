@@ -11,12 +11,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
 import java.time.Instant;
-import java.util.Base64;
 
 /**
  * Servicio de tokens: gestiona el ciclo de vida de los refresh tokens
@@ -56,11 +51,10 @@ public class TokenService {
 
     private static final Logger log = LoggerFactory.getLogger(TokenService.class);
 
-    /** Bytes de entropia para el refresh token. 32 bytes = 256 bits = 2^256 combinaciones. */
-    private static final int REFRESH_TOKEN_BYTES = 32;
-
-    /** SecureRandom es thread-safe y costoso de construir; lo reutilizamos. */
-    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    // La generación + hashing del token se delega a {@link SecureTokenHasher},
+    // clase compartida con {@link PasswordResetService}. DRY: ambos tokens
+    // (refresh + reset) usan exactamente la misma estrategia (32 bytes
+    // SecureRandom + SHA-256 hex).
 
     private final RefreshTokenRepository refreshTokenRepository;
     private final JwtTokenProvider jwtTokenProvider;
@@ -99,8 +93,8 @@ public class TokenService {
      */
     @Transactional
     public String generateRefreshToken(User user) {
-        String rawToken = generateRawToken();
-        String hash = hashToken(rawToken);
+        String rawToken = SecureTokenHasher.generateRawToken();
+        String hash = SecureTokenHasher.hashToken(rawToken);
         Instant now = Instant.now();
 
         RefreshToken entity = new RefreshToken();
@@ -133,7 +127,7 @@ public class TokenService {
      */
     @Transactional
     public TokenPair rotateRefreshToken(String rawOldToken) {
-        String oldHash = hashToken(rawOldToken);
+        String oldHash = SecureTokenHasher.hashToken(rawOldToken);
         RefreshToken old = refreshTokenRepository.findByTokenHash(oldHash)
                 .orElseThrow(() -> new InvalidTokenException("Invalid refresh token"));
 
@@ -164,8 +158,8 @@ public class TokenService {
         }
 
         // --- Emit new refresh token ---
-        String newRaw = generateRawToken();
-        String newHash = hashToken(newRaw);
+        String newRaw = SecureTokenHasher.generateRawToken();
+        String newHash = SecureTokenHasher.hashToken(newRaw);
         Instant now = Instant.now();
 
         RefreshToken newEntity = new RefreshToken();
@@ -192,7 +186,7 @@ public class TokenService {
      */
     @Transactional
     public void revokeRefreshToken(String rawToken) {
-        String hash = hashToken(rawToken);
+        String hash = SecureTokenHasher.hashToken(rawToken);
         refreshTokenRepository.findByTokenHash(hash).ifPresent(token -> {
             if (!token.isRevoked()) {
                 token.setRevokedAt(Instant.now());
@@ -220,40 +214,8 @@ public class TokenService {
     }
 
     // ============================================================
-    // Helpers privados
+    // Helpers: ver SecureTokenHasher (extraído para reutilización).
     // ============================================================
-
-    /**
-     * Genera un token opaco aleatorio: 32 bytes de SecureRandom codificados
-     * en Base64 URL-safe sin padding (~43 caracteres, 256 bits de entropia).
-     */
-    private String generateRawToken() {
-        byte[] bytes = new byte[REFRESH_TOKEN_BYTES];
-        SECURE_RANDOM.nextBytes(bytes);
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-    }
-
-    /**
-     * Hashea el token raw con SHA-256 y devuelve representacion hex (64 chars).
-     * <p>Hex en vez de Base64 para que el campo en BD sea legible y para
-     * evitar problemas de collation/encoding al comparar.
-     */
-    private String hashToken(String raw) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(raw.getBytes(StandardCharsets.UTF_8));
-            StringBuilder hex = new StringBuilder(hash.length * 2);
-            for (byte b : hash) {
-                String h = Integer.toHexString(0xff & b);
-                if (h.length() == 1) hex.append('0');
-                hex.append(h);
-            }
-            return hex.toString();
-        } catch (NoSuchAlgorithmException e) {
-            // SHA-256 esta garantizado en todas las JVM modernas.
-            throw new IllegalStateException("SHA-256 not available in this JVM", e);
-        }
-    }
 
     /**
      * Par (access token, refresh token, User) emitido tras un login o un
