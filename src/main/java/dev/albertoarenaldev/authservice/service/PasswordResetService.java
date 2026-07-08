@@ -7,9 +7,9 @@ import dev.albertoarenaldev.authservice.modelo.User;
 import dev.albertoarenaldev.authservice.repository.PasswordResetTokenRepository;
 import dev.albertoarenaldev.authservice.repository.UserRepository;
 import dev.albertoarenaldev.authservice.security.JwtProperties;
-import dev.albertoarenaldev.authservice.service.email.EmailSender;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,6 +19,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Servicio de password reset: gestiona el ciclo de vida de los tokens de
@@ -64,6 +65,34 @@ import java.util.Optional;
  * El reset token tiene 256 bits de entropía (fuerza bruta imposible),
  * así que la lentitud de BCrypt solo añadiría ~250ms de latencia
  * innecesaria a cada petición de reset. SHA-256 es ~1µs y suficiente.
+ *
+ * <p><b>Envio de email asincrono (OWASP anti-DoS / anti-enumeration):b>
+ * el envio SMTP ya NO se hace en el thread del request HTTP. Al
+ * generar el token publicamos un {@link PasswordResetRequestedEvent} que
+ * un {@link PasswordResetEventListener} consume con
+ * {@code @Async("emailExecutor")} +
+ * {@code @TransactionalEventListener(phase = AFTER_COMMIT)}. Beneficios:
+ * <ul>
+ *   <li><b>Anti-DoS:</b> spamming /forgot-password no bloquea threads
+ *       HTTP esperando el SMTP. El pool emailExecutor (core=2, max=10,
+ *       queue=500, DiscardPolicy) absorbe la carga y descarta el
+ *       excedente.</li>
+ *   <li><b>Anti-enumeration por timing:</b> el path "usuario no existe"
+ *       ejecuta un dummy {@code passwordEncoder.encode()} (~100-250ms)
+ *       para igualar la latencia del path exitoso. Un atacante que mide
+ *       tiempos de respuesta NO puede distinguir email registrado vs
+ *       no registrado.</li>
+ *   <li><b>Atomicidad:</b> AFTER_COMMIT garantiza que el correo solo se
+ *       envia si la insercion del token en BD commitea. No hay riesgo
+ *       de enlace muerto por rollback.</li>
+ * </ul>
+ *
+ * <p><b>Invalidacion de tokens previos:</b> antes de generar el token
+ * nuevo, {@link PasswordResetTokenRepository#invalidateActiveTokensForUser}
+ * marca como usados todos los tokens activos previos del usuario. Si
+ * el usuario pidio 3 resets en 5 minutos, los 3 correos se envian pero
+ * solo el ultimo token es valido. Cierra la ventana de ataque contra
+ * tokens viejos interceptados.</p>
  *
  * <p><b>Defensa en profundidad (revocación de sesiones):</b>
  * {@link #resetPassword} llama a {@link TokenService#revokeAllForUser(Long)}
@@ -135,26 +164,26 @@ public class PasswordResetService {
 
     private final UserRepository userRepository;
     private final PasswordResetTokenRepository tokenRepository;
-    private final EmailSender emailSender;
     private final PasswordEncoder passwordEncoder;
     private final TokenService tokenService;
     private final PasswordResetProperties resetProperties;
     private final long tokenExpirationMs;
+    private final ApplicationEventPublisher eventPublisher;
 
     public PasswordResetService(UserRepository userRepository,
                                 PasswordResetTokenRepository tokenRepository,
-                                EmailSender emailSender,
                                 PasswordEncoder passwordEncoder,
                                 TokenService tokenService,
                                 PasswordResetProperties resetProperties,
-                                JwtProperties jwtProperties) {
+                                JwtProperties jwtProperties,
+                                ApplicationEventPublisher eventPublisher) {
         this.userRepository = userRepository;
         this.tokenRepository = tokenRepository;
-        this.emailSender = emailSender;
         this.passwordEncoder = passwordEncoder;
         this.tokenService = tokenService;
         this.resetProperties = resetProperties;
         this.tokenExpirationMs = jwtProperties.getPasswordResetTokenExpirationMs();
+        this.eventPublisher = eventPublisher;
     }
 
     // ============================================================
@@ -181,17 +210,40 @@ public class PasswordResetService {
             // Silencio al cliente; trazabilidad interna con prefijo MD5
             // del email para no leakear PII al log.
             log.warn("Password reset requested for non-existent email: {}", emailTag);
+            // Defense in depth (OWASP anti-enumeration, timing equalization):
+            // el path "usuario existe" hace DB insert + SHA-256 + event publish
+            // (~5-15ms). El path "usuario no existe" sin dummy seria ~2-3ms
+            // (solo DB lookup). Un atacante midiendo latencia HTTP podria
+            // distinguir ambos casos. Ejecutamos un dummy bcrypt encode sobre
+            // un valor random (~100-250ms) para igualar la respuesta.
+            // El thread del request "se quema" el mismo tiempo que el exitoso.
+            // NOTA: a partir de ahora (Fase 6 fix) el path exitoso NO bloquea
+            // en SMTP (es async via event publisher), asi que el dummy bcrypt
+            // se convierte en el principal "relleno" del path not-found.
+            passwordEncoder.encode(UUID.randomUUID().toString());
             return;
         }
 
         User user = userOpt.get();
+
+        // Invalidar tokens de reset activos previos del usuario. Si el
+        // usuario pidio 3 resets en 5 minutos, los 3 correos se envian
+        // pero solo el ultimo token es valido. Cierra la ventana de
+        // ataque contra tokens viejos interceptados (defense in depth).
+        Instant now = Instant.now();
+        int invalidated = tokenRepository.invalidateActiveTokensForUser(user.getId(), now);
+        if (invalidated > 0) {
+            log.info("Invalidated {} previous active reset token(s) for user id={} before issuing new one",
+                    invalidated, user.getId());
+        }
+
         String rawToken = SecureTokenHasher.generateRawToken();
         String tokenHash = SecureTokenHasher.hashToken(rawToken);
 
         PasswordResetToken resetToken = new PasswordResetToken();
         resetToken.setUser(user);
         resetToken.setTokenHash(tokenHash);
-        resetToken.setExpiresAt(Instant.now().plusMillis(tokenExpirationMs));
+        resetToken.setExpiresAt(now.plusMillis(tokenExpirationMs));
         tokenRepository.save(resetToken);
 
         // Construir URL absoluta + cuerpo del correo.
@@ -200,8 +252,13 @@ public class PasswordResetService {
         String body = String.format(EMAIL_BODY_TEMPLATE,
                 resetProperties.getAppName(), resetUrl, expirationMinutes);
 
-        emailSender.send(email, EMAIL_SUBJECT, body);
-        log.info("Password reset link sent for user id={} email={}",
+        // Publicar evento (no SMTP sincronico). El listener lo consume
+        // en el pool emailExecutor tras el commit. Ver javadoc de la
+        // clase para los beneficios (anti-DoS, anti-enumeration por
+        // timing, atomicidad commit→send).
+        eventPublisher.publishEvent(new PasswordResetRequestedEvent(
+                email, EMAIL_SUBJECT, body));
+        log.info("Password reset link queued for user id={} email={}",
                 user.getId(), emailTag);
     }
 
