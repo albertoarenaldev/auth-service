@@ -1,0 +1,47 @@
+# =====================================================================
+# .dockerignore — Excluir del contexto de build de Docker
+# =====================================================================
+# El Dockerfile solo hace `COPY pom.xml` y `COPY src/`, asi que cualquier
+# otro archivo es excluido automaticamente. Este archivo esbeltiza el
+# contexto (importante para velocidad de build) y deja el repo limpio.
+# =====================================================================
+
+# Control de versiones (pesado y no util en imagenes)
+.git
+.gitignore
+.gitattributes
+
+# Artefactos de build locales (ya estan en target/ de la imagen, no en el contexto)
+target/
+*.jar
+*.war
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+
+# Archivos del sistema operativo
+.DS_Store
+Thumbs.db
+
+# Logs y temporales
+*.log
+*.tmp
+*.bak
+*.swp
+
+# Documentacion (no se copia al contenedor)
+README.md
+docs/
+LICENSE
+
+# Configuracion de CI (no se necesita dentro del contenedor)
+.github/
+
+# Maven wrapper si existiera (no usado actualmente)
+.mvn/
+mvnw
+mvnw.cmd
