@@ -136,6 +136,33 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
+
+            <!--
+                JaCoCo 0.8.11: cobertura de tests visible. Compatible con
+                Java 21 (bytecode 65) y con spring-boot 3.5.5. Genera el
+                reporte HTML/XML en target/site/jacoco/ al ejecutar
+                mvn verify (no en mvn test, intencionalmente: separa
+                ejecucion rapida de analisis completo).
+            -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.11</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 </project>
