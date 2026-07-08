@@ -399,6 +399,64 @@ Tests JPA que comparten la misma DB en memoria tienen problemas:
 4. Cambia el estado en la tabla de arriba si aplica
 5. Commit con `docs(adr): anadir ADR-XXX titulo-corto`
 
+## ⚠️ Known limitations
+
+### Legacy weak passwords (Fase 6 zxcvbn4j — no migra contrasenas pre-existentes)
+
+**Contexto:** el validator `@StrongPassword` (score zxcvbn &gt;= 3) se
+introdujo en el commit post-Fase 5. Aplica a
+`RegisterRequest.password` y `ResetPasswordRequest.newPassword`, pero
+NO a `LoginRequest.password` (NIST SP 800-63B §5.1.1.2: el check se
+hace "at time of password creation or change", no en cada login).
+
+**Limitacion:** los usuarios que se registraron con contrasenas debiles
+(e.g. "Password123!", que zxcvbn puntua &lt; 3) ANTES de este fix
+pueden seguir autenticandose indefinidamente. Solo quedan bloqueados
+cuando intenten hacer un password reset voluntario o sean forzados a
+ello.
+
+**Por que no es critico para V1:**
+- Las contrasenas de usuarios nuevos cumplen la politica desde el
+  primer momento.
+- Los ataques contra contrasenas debiles pre-existentes se mitigan
+  por BCrypt strength 12 (costo &gt;250ms por intento, fuerza bruta
+  inviable a esa escala) y por el rate limiting planeado para
+  Fase 7.
+- El check NO se aplica en login deliberadamente: si lo hicieramos,
+  cualquier cambio de politica (subir el threshold de 3 a 4) dejaria
+  a usuarios legitimos sin poder entrar.
+
+**Mitigaciones disponibles en V1 (operativas, no automaticas):**
+- Admin puede forzar un reset puntual sobre usuarios especificos
+  (endpoint futuro; hoy requiere SQL directo en BD).
+- En el proximo reset voluntario del usuario (olvido de contrasena),
+  la nueva contrasena SI pasa por `@StrongPassword` y queda registrada
+  con score &gt;= 3.
+
+**Mitigaciones estructurales para V2 (migracion):**
+- Anadir columna `password_changed_at` (Instant) a la tabla `users`.
+- En el login, comparar ese timestamp contra el deploy del validator
+  `@StrongPassword`: si `password_changed_at &lt; zxcvbn_introduced_at`,
+  forzar reset en el siguiente login.
+- Alternativa sin timestamp: un one-shot script de admin que re-hashee
+  con un valor random, invalide todas las sesiones, y envie email
+  de "tu cuenta fue migrada, restablece tu contrasena" a los usuarios
+  con contrasena flag (no tenemos forma de evaluar zxcvbn sobre el
+  bcrypt hash, asi que habria que marcar usuarios manualmente o
+  basarse en un cutoff temporal).
+
+**Decisiones alternativas consideradas:**
+- Forzar validacion en login: rechazada (romperia sesiones legitimas
+  al subir el threshold; NIST lo desaconseja explicitamente).
+- Pedir re-validacion al usuario en el proximo login via un flag
+  `requires_password_reset`: viable, marcado como "V2" porque
+  requiere cambios coordinados de frontend + endpoint
+  `POST /api/v1/users/me/password` (Fase 6 del roadmap original).
+
+**Refs:** OWASP Authentication Cheat Sheet, NIST SP 800-63B §5.1.1.2,
+auditoria de seguridad post-Fase 5 (hallazgo #3 cerrado para contrasenas
+nuevas, abierto para legacy).
+
 ## 🧩 Plantilla
 
 ```markdown
