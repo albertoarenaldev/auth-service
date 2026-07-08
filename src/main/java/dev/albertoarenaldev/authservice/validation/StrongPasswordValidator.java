@@ -3,7 +3,6 @@ package dev.albertoarenaldev.authservice.validation;
 import com.nulabinc.zxcvbn.Zxcvbn;
 import jakarta.validation.ConstraintValidator;
 import jakarta.validation.ConstraintValidatorContext;
-import org.springframework.stereotype.Component;
 
 /**
  * Validador de fortaleza de contrasena basado en zxcvbn4j (port Java
@@ -38,7 +37,6 @@ import org.springframework.stereotype.Component;
  * de presencia (mas claro: "el campo es obligatorio") en vez de
  * mezclarse con el de calidad ("la contrasena es debil").
  */
-@Component
 public class StrongPasswordValidator implements ConstraintValidator<StrongPassword, String> {
 
     /**
