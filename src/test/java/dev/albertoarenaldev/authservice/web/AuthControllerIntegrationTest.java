@@ -108,9 +108,14 @@ class AuthControllerIntegrationTest {
     }
 
     private RegisterRequest sampleRegisterRequest() {
+        // "correct horse battery staple" es la passphrase canonica de
+        // XKCD #936. zxcvbn4j la puntua con score 4 (very unguessable)
+        // y pasa el threshold de @StrongPassword. Antes usabamos
+        // "Password123!" pero zxcvbn4j lo puntua bajo (palabra comun
+        // + nums) y queda bloqueado por el validador nuevo.
         return new RegisterRequest(
                 uniqueEmail(),
-                "Password123!",
+                "correct horse battery staple",
                 "Test",
                 "User"
         );
@@ -582,6 +587,66 @@ class AuthControllerIntegrationTest {
     void resetPassword_withTooShortPassword_returns400() throws Exception {
         // @Size(min = 8) → 7 chars debe fallar
         ResetPasswordRequest req = new ResetPasswordRequest("any-token", "Sh0rt!7");
+
+        mockMvc.perform(post(RESET_PASSWORD_PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors").isArray())
+                .andExpect(jsonPath("$.fieldErrors[?(@.field == 'newPassword')]").exists());
+    }
+
+    // ============================================================
+    // /register + /reset-password — Fase 6: validacion zxcvbn
+    // (auditoria finding #3 — NIST SP 800-63B)
+    // ============================================================
+
+    @Test
+    void register_withWeakPassword_returns400() throws Exception {
+        // "password123" tiene 11 chars (pasa @Size 8-100) pero score
+        // zxcvbn = 0 (palabra comun + nums). Debe fallar @StrongPassword
+        // y el controller responde 400 con field error en "password".
+        RegisterRequest req = new RegisterRequest(
+                uniqueEmail(),
+                "password123",
+                "Test",
+                "User"
+        );
+
+        mockMvc.perform(post(REGISTER_PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors").isArray())
+                .andExpect(jsonPath("$.fieldErrors[?(@.field == 'password')]").exists());
+    }
+
+    @Test
+    void register_withStrongPassword_returns201() throws Exception {
+        // Sanity check: una passphrase robusta pasa todas las validaciones
+        // y permite el registro end-to-end. Cubre la direccion positiva
+        // del validador para que no nos quedemos solo con el caso de error.
+        RegisterRequest req = new RegisterRequest(
+                uniqueEmail(),
+                "correct horse battery staple",  // XKCD famous, score 4
+                "Test",
+                "User"
+        );
+
+        mockMvc.perform(post(REGISTER_PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.accessToken").isNotEmpty())
+                .andExpect(jsonPath("$.refreshToken").isNotEmpty());
+    }
+
+    @Test
+    void resetPassword_withWeakPassword_returns400() throws Exception {
+        // Misma idea que /register: 11 chars (pasa @Size) pero score 0.
+        // El validator debe correr antes de PasswordResetService.resetPassword
+        // y devolver 400 con field error en "newPassword".
+        ResetPasswordRequest req = new ResetPasswordRequest("any-token", "password123");
 
         mockMvc.perform(post(RESET_PASSWORD_PATH)
                         .contentType(MediaType.APPLICATION_JSON)
