@@ -4,6 +4,9 @@
 [![Java](https://img.shields.io/badge/Java-21-ED8B00?logo=openjdk&logoColor=white)](https://www.oracle.com/java/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5.5-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen)](#)
+[![Branches](https://img.shields.io/badge/branches-89%25-green)](#)
+[![Tests](https://img.shields.io/badge/tests-100%2F100-brightgreen)](#)
 
 > Auth Service — stateless JWT authentication built with Spring Boot 3 + Spring Security 6.
 > Designed as a portfolio project showcasing clean architecture, testable security, and 12-factor config.
@@ -37,7 +40,7 @@
 | **Fase 5** — Password reset + hardening | ✅ | Flujo completo con email token + endpoint público + NIST zxcvbn + optimistic locking en tokens |
 | **Fase 6** — User profile | ⏳ | `GET/PUT /api/v1/users/me`, change password |
 
-**Tests:** 100/100 verde · **Java:** 21 · **Spring Boot:** 3.5.5
+**Tests:** 100/100 verde · **Cobertura:** 95% line · 89% branch · 100% class (JaCoCo 0.8.11 sobre `mvn verify`) · **Java:** 21 · **Spring Boot:** 3.5.5
 
 ---
 
@@ -235,7 +238,14 @@ mvn -B test -Dtest='*RepositoryTest'
 mvn -B test -X
 ```
 
-**Cobertura actual:** 100 tests · 100% passing · 0 flaky (15 clases: 79 `@Test` + 3 `@ParameterizedTest` expanden los 21 casos restantes)
+**Cobertura actual:**
+
+- **Tests:** 100 / 100 passing · 0 flaky (15 clases: 79 `@Test` + 3 `@ParameterizedTest` expanden los 21 casos restantes)
+- **Line coverage (JaCoCo):** 95% — 362 de 382 lineas cubiertas por los tests
+- **Branch coverage:** 89% — 136 de 152 ramas cubiertas
+- **Class coverage:** 100% — los 40 classes del main tienen al menos un test que invoca su codigo (medicion a nivel de "clase tocada", NO garantiza que todas las lineas o ramas esten ejercitadas; para eso mirar line/branch coverage arriba)
+- **Gap conocido:** 5% de lineas sin cubrir = ramas defensivas (validacion de entrada redundante, paths de excepcion con mime types no soportados). Tests cubren el happy path + los errores mas probables; el resto es codigo de defensa en profundidad esperado en cualquier servicio de auth.
+- **Reporte completo:** `target/site/jacoco/index.html` tras `mvn verify` (no se ejecuta en `mvn test` por diseno: separa ejecucion rapida de analisis profundo)
 
 **Perfiles de test:**
 - `@DataJpaTest` — tests de repositorios con H2 aislada (UUID por test)
