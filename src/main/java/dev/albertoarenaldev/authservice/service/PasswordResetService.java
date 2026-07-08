@@ -39,11 +39,24 @@ import java.util.Optional;
  *   <li>{@link #resetPassword(String, String)} — recibe token raw +
  *       nueva contraseña. Valida el token (existencia, no expirado,
  *       no usado, usuario asociado habilitado), marca el token como
- *       usado y actualiza el {@code passwordHash} del usuario dentro
- *       de una sola transacción. Si algo falla, ambas operaciones se
- *       rollbackean. Devuelve {@code void}; el controlador responde
- *       204 No Content.</li>
+ *       usado, actualiza el {@code passwordHash} del usuario y
+ *       <b>revoca todos los refresh tokens activos del usuario</b>,
+ *       todo dentro de una sola transacción. La revocation de refresh
+ *       tokens es la defensa en profundidad de OWASP contra sesiones
+ *       persistentes tras un cambio de contraseña: aunque un atacante
+ *       tuviera un refresh token robado, el reset lo invalida. Si
+ *       algo falla, todas las operaciones se rollbackean. Devuelve
+ *       {@code void}; el controlador responde 204 No Content.</li>
  * </ul>
+ *
+ * <p><b>Limitación conocida del flujo password-reset:</b> el access
+ * token JWT sigue siendo válido hasta su expiración natural (15 min)
+ * tras un reset. La {@link TokenService#revokeAllForUser(Long)} sólo
+ * invalida refresh tokens — si quisiéramos bloquear el JWT actual
+ * sería necesaria una blocklist server-side (Redis), planificada para
+ * Fase 7. En la práctica, el atacante con un JWT válido puede seguir
+ * usando el access durante <=15 min, pero el refresh falla y debe
+ * re-autenticarse.</p>
  *
  * <p><b>Por qué SHA-256 (no BCrypt) para hashear el reset token:</b>
  * mismo argumento que {@link TokenService}. BCrypt es deliberadamente
@@ -51,6 +64,16 @@ import java.util.Optional;
  * El reset token tiene 256 bits de entropía (fuerza bruta imposible),
  * así que la lentitud de BCrypt solo añadiría ~250ms de latencia
  * innecesaria a cada petición de reset. SHA-256 es ~1µs y suficiente.
+ *
+ * <p><b>Defensa en profundidad (revocación de sesiones):</b>
+ * {@link #resetPassword} llama a {@link TokenService#revokeAllForUser(Long)}
+ * tras actualizar el {@code passwordHash}. Esto invalida TODOS los
+ * refresh tokens persistidos del usuario en {@code refresh_tokens}
+ * (filtra por {@code revoked_at IS NULL}). Como ambas operaciones viven
+ * dentro del mismo {@code @Transactional} (REQUIRED se une a la TX
+ * abierta), la atomicidad se preserva: si la revocation falla, el
+ * update de password hace rollback y el estado del usuario permanece
+ * intacto (puede reintentar con el mismo token).</p>
  *
  * <p><b>Política de fallo del envío SMTP:</b> {@link SmtpEmailSender} captura
  * internamente {@code MailException} y solo loguea (no propaga), así que un
@@ -114,6 +137,7 @@ public class PasswordResetService {
     private final PasswordResetTokenRepository tokenRepository;
     private final EmailSender emailSender;
     private final PasswordEncoder passwordEncoder;
+    private final TokenService tokenService;
     private final PasswordResetProperties resetProperties;
     private final long tokenExpirationMs;
 
@@ -121,12 +145,14 @@ public class PasswordResetService {
                                 PasswordResetTokenRepository tokenRepository,
                                 EmailSender emailSender,
                                 PasswordEncoder passwordEncoder,
+                                TokenService tokenService,
                                 PasswordResetProperties resetProperties,
                                 JwtProperties jwtProperties) {
         this.userRepository = userRepository;
         this.tokenRepository = tokenRepository;
         this.emailSender = emailSender;
         this.passwordEncoder = passwordEncoder;
+        this.tokenService = tokenService;
         this.resetProperties = resetProperties;
         this.tokenExpirationMs = jwtProperties.getPasswordResetTokenExpirationMs();
     }
@@ -230,7 +256,16 @@ public class PasswordResetService {
         user.setPasswordHash(passwordEncoder.encode(newPassword));
         userRepository.save(user);
 
-        log.info("Password reset successful for user id={}", user.getId());
+        // Defensa en profundidad (OWASP ASVS V3.5 / V6): tras un cambio de
+        // password, todas las sesiones existentes deben invalidarse. Un
+        // atacante con un refresh token robado pero sin el password nuevo
+        // queda bloqueado — el refresh que presentará tras el reset vence
+        // y la sesion se destruye. Ambas operaciones viven dentro del mismo
+        // @Transactional: si la revocacion falla, el update de password
+        // hace rollback (el token sigue valido, el usuario puede reintentar).
+        int revokedSessions = tokenService.revokeAllForUser(user.getId());
+        log.info("Password reset successful for user id={} ({} refresh token(s) revoked)",
+                user.getId(), revokedSessions);
     }
 
     // ============================================================

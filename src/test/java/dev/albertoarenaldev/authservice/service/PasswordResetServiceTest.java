@@ -24,6 +24,7 @@ import java.util.regex.Pattern;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -69,6 +70,7 @@ class PasswordResetServiceTest {
     @Mock private PasswordResetTokenRepository tokenRepository;
     @Mock private EmailSender emailSender;
     @Mock private PasswordEncoder passwordEncoder;
+    @Mock private TokenService tokenService;
     @Mock private PasswordResetProperties passwordResetProperties;
     @Mock private JwtProperties jwtProperties;
 
@@ -95,9 +97,12 @@ class PasswordResetServiceTest {
         lenient().when(passwordResetProperties.getAppName()).thenReturn("Auth Service");
 
         // Constructor manual: ahora ve el TTL stubbeado (900s en vez de 0).
+        // El parametro TokenService es el sexto argumento (en orden
+        // repositorios → I/O → state-mutators → config).
         passwordResetService = new PasswordResetService(
                 userRepository, tokenRepository, emailSender,
-                passwordEncoder, passwordResetProperties, jwtProperties);
+                passwordEncoder, tokenService,
+                passwordResetProperties, jwtProperties);
     }
 
     // ============================================================
@@ -259,6 +264,26 @@ class PasswordResetServiceTest {
 
         verify(tokenRepository).save(stored);
         verify(userRepository).save(user);
+        // Defensa en profundidad (OWASP): tambien se revocan TODOS los
+        // refresh tokens del usuario. Verificacion redundante con
+        // resetPassword_whenSuccessful_revokesAllRefreshTokensOfUser para
+        // que un fallo del path de revocacion se vea aqui tambien.
+        verify(tokenService).revokeAllForUser(1L);
+    }
+
+    @Test
+    void resetPassword_whenSuccessful_revokesAllRefreshTokensOfUser() {
+        User user = sampleUser();
+        PasswordResetToken stored = sampleValidToken(user);
+        when(tokenRepository.findByTokenHash(anyString())).thenReturn(Optional.of(stored));
+        when(passwordEncoder.encode(anyString())).thenReturn("new-bcrypt-hash");
+        when(tokenService.revokeAllForUser(1L)).thenReturn(3); // 3 sesiones en otros dispositivos
+
+        passwordResetService.resetPassword("some-raw-token", "NewPassword123!");
+
+        // Defensa en profundidad (OWASP): todos los refresh tokens del usuario
+        // se revocan tras un cambio exitoso de password
+        verify(tokenService).revokeAllForUser(1L);
     }
 
     @Test
@@ -275,6 +300,8 @@ class PasswordResetServiceTest {
         // Mensaje generico + sin mutaciones: usedAt preservado, no se guarda nada
         verify(userRepository, never()).save(any(User.class));
         verify(tokenRepository, never()).save(any(PasswordResetToken.class));
+        // Sin revocar sesiones: la validacion fallo antes de llegar al path exitoso
+        verify(tokenService, never()).revokeAllForUser(anyLong());
         assertThat(stored.getUsedAt()).isEqualTo(previousUsedAt);
     }
 
@@ -290,6 +317,7 @@ class PasswordResetServiceTest {
 
         verify(userRepository, never()).save(any(User.class));
         verify(tokenRepository, never()).save(any(PasswordResetToken.class));
+        verify(tokenService, never()).revokeAllForUser(anyLong());
     }
 
     @Test
@@ -305,6 +333,7 @@ class PasswordResetServiceTest {
         // Defensa en profundidad: ni se actualiza el user ni se marca el token
         verify(userRepository, never()).save(any(User.class));
         verify(tokenRepository, never()).save(any(PasswordResetToken.class));
+        verify(tokenService, never()).revokeAllForUser(anyLong());
         assertThat(stored.getUsedAt()).isNull();
     }
 
@@ -317,5 +346,6 @@ class PasswordResetServiceTest {
 
         verify(userRepository, never()).save(any(User.class));
         verify(tokenRepository, never()).save(any(PasswordResetToken.class));
+        verify(tokenService, never()).revokeAllForUser(anyLong());
     }
 }
