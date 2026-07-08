@@ -181,6 +181,13 @@ public class PasswordResetService {
             // Silencio al cliente; trazabilidad interna con prefijo MD5
             // del email para no leakear PII al log.
             log.warn("Password reset requested for non-existent email: {}", emailTag);
+            // Anti-enumeracion por tiempo (OWASP). El path "usuario existe"
+            // hace DB insert + SHA-256 + envio de correo (~5-15 ms).
+            // El path "no existe" sin dummy seria ~2-3 ms (solo DB lookup).
+            // Un atacante midiendo latencia HTTP podria distinguir ambos casos.
+            // Quemamos ~100-250 ms con un bcrypt encode ficticio para igualar
+            // ambos paths. El resultado se descarta.
+            passwordEncoder.encode(java.util.UUID.randomUUID().toString());
             return;
         }
 
