@@ -185,13 +185,25 @@ public class PasswordResetService {
         }
 
         User user = userOpt.get();
+
+        // Invalidar tokens de reset activos previos del usuario. Si el
+        // usuario pidio 3 resets en 5 minutos, los 3 correos se envian
+        // pero solo el ultimo token es valido. Cierra la ventana de
+        // ataque contra tokens viejos interceptados (defense in depth).
+        Instant now = Instant.now();
+        int invalidated = tokenRepository.invalidateActiveTokensForUser(user.getId(), now);
+        if (invalidated > 0) {
+            log.info("Invalidated {} previous active reset token(s) for user id={} before issuing new one",
+                    invalidated, user.getId());
+        }
+
         String rawToken = SecureTokenHasher.generateRawToken();
         String tokenHash = SecureTokenHasher.hashToken(rawToken);
 
         PasswordResetToken resetToken = new PasswordResetToken();
         resetToken.setUser(user);
         resetToken.setTokenHash(tokenHash);
-        resetToken.setExpiresAt(Instant.now().plusMillis(tokenExpirationMs));
+        resetToken.setExpiresAt(now.plusMillis(tokenExpirationMs));
         tokenRepository.save(resetToken);
 
         // Construir URL absoluta + cuerpo del correo.
