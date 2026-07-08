@@ -127,6 +127,8 @@ Claims del JWT:
 | `POST` | `/api/v1/auth/login` | público | Login: `{email, password}` → 200 + `{accessToken, refreshToken, user}`. 401 generico para evitar user enumeration |
 | `POST` | `/api/v1/auth/refresh` | público | Rotar refresh token: `{refreshToken}` → 200 + nuevos tokens. Deteccion de reuso + revocacion de familia |
 | `POST` | `/api/v1/auth/logout` | público | Revocar refresh token: `{refreshToken}` → 204 No Content. Idempotente |
+| `POST` | `/api/v1/auth/forgot-password` | público | Solicitar email de reset: `{email}` → 202 Accepted (devuelve 202 exista o no el email, anti-enumeración) |
+| `POST` | `/api/v1/auth/reset-password` | público | Confirmar reset: `{token, newPassword}` → 204 No Content. Token hasheado SHA-256, un solo uso, expira en 15 min |
 | `GET` | `/actuator/health` | público | Health check agregado (DB, disk, mail) |
 | `GET` | `/actuator/info` | 🔒 autenticado | Metadata del build (protegido para evitar info leak) |
 
@@ -134,8 +136,6 @@ Claims del JWT:
 
 | Método | Path | Auth | Descripción |
 |---|---|---|---|
-| `POST` | `/api/v1/auth/password/reset/request` | público | Solicitar email de reset |
-| `POST` | `/api/v1/auth/password/reset/confirm` | público | Confirmar reset con token |
 | `GET` | `/api/v1/users/me` | 🔒 autenticado | Perfil del usuario actual |
 | `PUT` | `/api/v1/users/me` | 🔒 autenticado | Actualizar perfil |
 | `POST` | `/api/v1/users/me/password` | 🔒 autenticado | Cambiar contraseña |
