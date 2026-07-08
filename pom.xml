@@ -30,6 +30,7 @@
         <java.version>21</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <jjwt.version>0.12.5</jjwt.version>
+        <zxcvbn.version>1.9.0</zxcvbn.version>
     </properties>
 
     <!-- =============================================================
@@ -91,6 +92,16 @@
             <artifactId>jjwt-jackson</artifactId>
             <version>${jjwt.version}</version>
             <scope>runtime</scope>
+        </dependency>
+
+        <!-- Password strength scoring (zxcvbn4j — port Java de zxcvbn de Dropbox).
+             Heuristica offline para bloquear contraseñas debiles/predecibles
+             sin necesidad de consultar APIs externas. Ver @StrongPassword
+             y StrongPasswordValidator para la logica. -->
+        <dependency>
+            <groupId>com.nulab-inc</groupId>
+            <artifactId>zxcvbn</artifactId>
+            <version>${zxcvbn.version}</version>
         </dependency>
 
         <!-- Tests -->

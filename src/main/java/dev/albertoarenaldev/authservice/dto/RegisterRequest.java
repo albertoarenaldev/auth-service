@@ -1,5 +1,6 @@
 package dev.albertoarenaldev.authservice.dto;
 
+import dev.albertoarenaldev.authservice.validation.StrongPassword;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -20,6 +21,7 @@ public record RegisterRequest(
 
         @NotBlank
         @Size(min = 8, max = 100)
+        @StrongPassword
         String password,
 
         @NotBlank

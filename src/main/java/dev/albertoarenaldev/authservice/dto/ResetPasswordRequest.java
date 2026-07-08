@@ -1,5 +1,6 @@
 package dev.albertoarenaldev.authservice.dto;
 
+import dev.albertoarenaldev.authservice.validation.StrongPassword;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
@@ -11,8 +12,9 @@ import jakarta.validation.constraints.Size;
  * raw solo lo ve el usuario una vez). La nueva password reemplaza a la
  * anterior y todas las sesiones activas del usuario se revocan.
  *
- * <p>Politica de password igual a la de registro: 8-100 chars. Spring
- * Validation aplica las constraints antes de llegar al service.
+ * <p>Politica de password igual a la de registro: 8-100 chars + score
+ * zxcvbn &gt;= 3 (NIST SP 800-63B). Spring Validation aplica las
+ * constraints antes de llegar al service.
  */
 public record ResetPasswordRequest(
 
@@ -21,6 +23,7 @@ public record ResetPasswordRequest(
 
         @NotBlank
         @Size(min = 8, max = 100)
+        @StrongPassword
         String newPassword
 
 ) {
