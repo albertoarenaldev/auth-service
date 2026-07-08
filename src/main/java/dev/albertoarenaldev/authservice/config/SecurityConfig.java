@@ -3,6 +3,7 @@ package dev.albertoarenaldev.authservice.config;
 import dev.albertoarenaldev.authservice.security.JwtAuthenticationEntryPoint;
 import dev.albertoarenaldev.authservice.security.JwtAuthenticationFilter;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.Customizer;
@@ -24,7 +25,8 @@ import java.util.List;
  *
  * <p>Reglas de autorización:
  * <ul>
- *   <li>{@code /api/v1/auth/**} — público (register, login, refresh, health)</li>
+ *   <li>{@code /api/v1/auth/**} — público (register, login, refresh, health,
+ *       forgot-password, reset-password — todos sin autenticación previa)</li>
  *   <li>{@code /actuator/health} — público (load balancers, monitoring)</li>
  *   <li>{@code /actuator/info} — protegido (puede leakear metadata del build)</li>
  *   <li>Resto — requiere JWT válido en el header {@code Authorization}</li>
@@ -33,9 +35,15 @@ import java.util.List;
  * <p>CSRF deshabilitado (la API es stateless, no usa cookies de sesión).
  * Sesiones stateless. CORS configurable vía {@code app.cors.origins} (CSV).
  * El filtro JWT se inserta antes de {@code UsernamePasswordAuthenticationFilter}.
+ *
+ * <p>{@link EnableConfigurationProperties} registra el bean
+ * {@link PasswordResetProperties} (prefijo {@code app.password-reset.*}).
+ * Es complementario al {@code @ConfigurationPropertiesScan} del main
+ * application class, que solo escanea el paquete {@code security}.
  */
 @Configuration
 @EnableWebSecurity
+@EnableConfigurationProperties(PasswordResetProperties.class)
 public class SecurityConfig {
 
     private final JwtAuthenticationEntryPoint authenticationEntryPoint;
