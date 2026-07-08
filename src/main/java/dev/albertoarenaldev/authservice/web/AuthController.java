@@ -1,10 +1,13 @@
 package dev.albertoarenaldev.authservice.web;
 
 import dev.albertoarenaldev.authservice.dto.AuthResponse;
+import dev.albertoarenaldev.authservice.dto.ForgotPasswordRequest;
 import dev.albertoarenaldev.authservice.dto.LoginRequest;
 import dev.albertoarenaldev.authservice.dto.RefreshRequest;
 import dev.albertoarenaldev.authservice.dto.RegisterRequest;
+import dev.albertoarenaldev.authservice.dto.ResetPasswordRequest;
 import dev.albertoarenaldev.authservice.service.AuthService;
+import dev.albertoarenaldev.authservice.service.PasswordResetService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -27,15 +30,20 @@ import java.util.Map;
  *   <li>{@code POST /login} - autentica por email+password y emite tokens.</li>
  *   <li>{@code POST /refresh} - rota el refresh token y emite tokens nuevos.</li>
  *   <li>{@code POST /logout} - revoca un refresh token (logout de un dispositivo).</li>
+ *   <li>{@code POST /forgot-password} - inicia el flujo de password reset.</li>
+ *   <li>{@code POST /reset-password} - canjea el token y actualiza password.</li>
  * </ul>
  *
- * <p>Todos los endpoints (salvo /health) son publicos segun SecurityConfig
+ * <p>Todos los endpoints son publicos segun SecurityConfig
  * ({@code /api/v1/auth/**} -> permitAll). La validacion de credenciales,
  * la generacion de tokens y la deteccion de reuso se hacen en
- * {@link AuthService}; este controller solo orquesta el request/response.
+ * {@link AuthService}; el flujo de password reset vive en
+ * {@link PasswordResetService}. Este controller solo orquesta el
+ * request/response.
  *
- * <p>Los errores de negocio (409 email duplicado, 401 credenciales invalidas,
- * 401 token invalido) se traducen automaticamente a respuestas JSON
+ * <p>Los errores de negocio (400 bean validation, 401 credenciales
+ * invalidas / token invalido / reset token invalido / reuso de familia,
+ * 409 email duplicado) se traducen automaticamente a respuestas JSON
  * estandarizadas por {@code GlobalExceptionHandler} (no se manejan aqui).
  */
 @RestController
@@ -43,9 +51,12 @@ import java.util.Map;
 public class AuthController {
 
     private final AuthService authService;
+    private final PasswordResetService passwordResetService;
 
-    public AuthController(AuthService authService) {
+    public AuthController(AuthService authService,
+                          PasswordResetService passwordResetService) {
         this.authService = authService;
+        this.passwordResetService = passwordResetService;
     }
 
     /**
@@ -110,6 +121,61 @@ public class AuthController {
     @PostMapping("/logout")
     public ResponseEntity<Void> logout(@Valid @RequestBody RefreshRequest request) {
         authService.logout(request.refreshToken());
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Inicia el flujo de password reset. Devuelve SIEMPRE 202 Accepted
+     * (exista o no el email en BD) para mitigar user enumeration
+     * (OWASP Authentication Cheat Sheet). Si el email existe, el servicio
+     * {@link PasswordResetService} genera un token opaco, lo persiste
+     * hasheado (SHA-256) y envia el correo de forma sincrona dentro del
+     * handler (latencia SMTP ~150-250ms en el caso feliz).
+     *
+     * <p>El correo nunca se envia a emails no registrados; en ese caso
+     * el servicio registra un evento de auditoria anonimo (prefijo MD5
+     * del email, sin cleartext) y devuelve sin enviar correo. La
+     * diferencia no es visible al cliente.
+     *
+     * @return 202 Accepted (cuerpo vacio)
+     * @throws 400 si el body no pasa la validacion Bean Validation
+     *         (campo email no vacio y formato valido)
+     */
+    @PostMapping("/forgot-password")
+    public ResponseEntity<Void> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        passwordResetService.forgotPassword(request.email());
+        return ResponseEntity.accepted().build();
+    }
+
+    /**
+     * Canjea un token de password reset y actualiza la contrasena del
+     * usuario. La marcacion del token como usado y la actualizacion del
+     * passwordHash se hacen atomicamente en una sola transaccion dentro
+     * de {@link PasswordResetService}.
+     *
+     * <p>Si el token es invalido, expiro, ya se uso, o el usuario
+     * asociado esta deshabilitado, el servicio lanza
+     * {@code InvalidTokenException} (mapeada a HTTP 401 por
+     * {@code GlobalExceptionHandler}) con un mensaje generico para no
+     * permitir ataques de tipo "oracle" (el atacante no debe poder
+     * distinguir las distintas razones del fallo).
+     *
+     * <p><b>Limitacion conocida (Fase 5):</b> tras este cambio, las
+     * sesiones existentes del usuario NO se invalidan automaticamente —
+     * quedan como sesiones validas hasta que el access token JWT expire
+     * (15 min). Una revocacion explicita de los refresh tokens del
+     * usuario seria una defensa en profundidad contra takeover y queda
+     * anotada como follow-up.
+     *
+     * @return 204 No Content (cuerpo vacio)
+     * @throws 400 si el body no pasa la validacion Bean Validation
+     *         (campo token no vacio, newPassword entre 8-100 chars)
+     * @throws 401 si el token no existe, expiro, ya se uso, o el
+     *         usuario asociado esta deshabilitado
+     */
+    @PostMapping("/reset-password")
+    public ResponseEntity<Void> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+        passwordResetService.resetPassword(request.token(), request.newPassword());
         return ResponseEntity.noContent().build();
     }
 }
