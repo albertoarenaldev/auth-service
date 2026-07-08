@@ -277,6 +277,68 @@ curl -i -H "Authorization: Bearer not.a.real.jwt" \
 # → HTTP/1.1 401 Unauthorized
 ```
 
+#### 🧪 Smoke test end-to-end (con Docker)
+
+Flujo completo que valida los 5 componentes principales del servicio (PostgreSQL, Flyway, BCrypt, JWT, JavaMailSender) en menos de 1 minuto. Requiere tener `docker compose up` corriendo.
+
+**Paso 1: registrar usuario nuevo**
+
+```bash
+curl -i -X POST http://localhost:8080/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"alice@example.com","password":"correcto-caballo-bateria-grapa-9421","firstName":"Alice","lastName":"Doe"}'
+# → HTTP/1.1 201 Created
+# → {"accessToken":"eyJ...","refreshToken":"...","user":{"id":1,...,"roles":["ROLE_USER"]}}
+```
+
+**Paso 2: comprobar que Flyway aplicó las migraciones**
+
+```bash
+docker compose logs auth-service | grep -iE 'flyway|migrat' | head -10
+# → "Migrating schema "public" to version "1 - init schema""
+# → "Migrating schema "public" to version "2 - add version column""
+# → "Successfully applied 2 migrations to schema "public""
+```
+
+**Paso 3: listar las tablas creadas en PostgreSQL**
+
+```bash
+docker compose exec postgres psql -U authuser -d authdb -c '\dt'
+# → 6 tablas: flyway_schema_history, password_reset_tokens, refresh_tokens,
+#             roles, user_roles, users
+```
+
+**Paso 4: iniciar el flujo de password reset**
+
+```bash
+# 4a) pedir el email de reset (devuelve 202 exista o no el email)
+curl -i -X POST http://localhost:8080/api/v1/auth/forgot-password \
+  -H "Content-Type: application/json" \
+  -d '{"email":"alice@example.com"}'
+# → HTTP/1.1 202 Accepted
+
+# 4b) abrir MailHog en http://localhost:8025 y copiar el token del link
+#     (formato: http://localhost:5173/reset-password?token=<TOKEN>)
+
+# 4c) canjear el token y actualizar la password
+curl -i -X POST http://localhost:8080/api/v1/auth/reset-password \
+  -H "Content-Type: application/json" \
+  -d '{"token":"<TOKEN_DEL_EMAIL>","newPassword":"MiNuevaPasswordSegura-2026"}'
+# → HTTP/1.1 204 No Content
+```
+
+**Paso 5: login con la nueva password**
+
+```bash
+curl -i -X POST http://localhost:8080/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"alice@example.com","password":"MiNuevaPasswordSegura-2026"}'
+# → HTTP/1.1 200 OK
+# → nuevos accessToken + refreshToken (la password anterior ya no funciona)
+```
+
+**Resultado esperado:** los 5 pasos devuelven los códigos HTTP indicados. Si alguno falla, los logs de la app están en `docker compose logs auth-service` y los emails enviados en http://localhost:8025.
+
 ---
 
 ## ✅ Tests
