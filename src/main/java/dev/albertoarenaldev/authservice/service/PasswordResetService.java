@@ -10,6 +10,7 @@ import dev.albertoarenaldev.authservice.security.JwtProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -307,22 +308,39 @@ public class PasswordResetService {
         // por @Transactional: si passwordEncoder o save() fallan, AMBOS cambios
         // se rollbackean, dejando el estado intacto y permitiendo reintento
         // con el mismo token.
+        //
+        // Auditoria finding #4: el save del token lanza
+        // ObjectOptimisticLockingFailureException si @Version detecto una
+        // modificacion concurrente (dos requests con el mismo token). El
+        // catch de abajo traduce a InvalidTokenException para que el cliente
+        // vea HTTP 401 con el mismo mensaje generico que "token ya usado",
+        // sin distinguir entre ambos casos (defensa contra oraculo).
         token.setUsedAt(Instant.now());
-        tokenRepository.save(token);
+        try {
+            tokenRepository.save(token);
+            user.setPasswordHash(passwordEncoder.encode(newPassword));
+            userRepository.save(user);
 
-        user.setPasswordHash(passwordEncoder.encode(newPassword));
-        userRepository.save(user);
-
-        // Defensa en profundidad (OWASP ASVS V3.5 / V6): tras un cambio de
-        // password, todas las sesiones existentes deben invalidarse. Un
-        // atacante con un refresh token robado pero sin el password nuevo
-        // queda bloqueado — el refresh que presentará tras el reset vence
-        // y la sesion se destruye. Ambas operaciones viven dentro del mismo
-        // @Transactional: si la revocacion falla, el update de password
-        // hace rollback (el token sigue valido, el usuario puede reintentar).
-        int revokedSessions = tokenService.revokeAllForUser(user.getId());
-        log.info("Password reset successful for user id={} ({} refresh token(s) revoked)",
-                user.getId(), revokedSessions);
+            // Defensa en profundidad (OWASP ASVS V3.5 / V6): tras un cambio de
+            // password, todas las sesiones existentes deben invalidarse. Un
+            // atacante con un refresh token robado pero sin el password nuevo
+            // queda bloqueado — el refresh que presentará tras el reset vence
+            // y la sesion se destruye. Ambas operaciones viven dentro del mismo
+            // @Transactional: si la revocacion falla, el update de password
+            // hace rollback (el token sigue valido, el usuario puede reintentar).
+            int revokedSessions = tokenService.revokeAllForUser(user.getId());
+            log.info("Password reset successful for user id={} ({} refresh token(s) revoked)",
+                    user.getId(), revokedSessions);
+        } catch (ObjectOptimisticLockingFailureException ex) {
+            // Concurrencia detectada por @Version: otro request proceso el
+            // mismo token entre el load y el save de este thread. La TX se
+            // rollbackea (cambios parciales no se persisten). El cliente ve
+            // HTTP 401 generico — no distinguible de "token ya usado", lo
+            // cual evita un canal lateral de informacion.
+            log.warn("Password reset race detected: token id={} was concurrently modified "
+                    + "(audit #4 fix, OWASP concurrency safety); treating as used", token.getId());
+            throw new InvalidTokenException("Invalid or expired reset token");
+        }
     }
 
     // ============================================================

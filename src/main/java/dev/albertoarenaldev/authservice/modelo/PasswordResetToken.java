@@ -10,6 +10,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 
 import java.time.Instant;
 
@@ -45,6 +46,31 @@ public class PasswordResetToken {
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
+
+    /**
+     * Version para optimistic locking de Hibernate (auditoria finding #4).
+     * Protege contra una race condition teorica: dos requests concurrentes
+     * con el mismo token ambos pasaban la validacion (usedAt=null) y ambos
+     * intentaban marcar el token como usado. Sin @Version, ambas escrituras
+     * tenian exito (last write wins); con @Version, la segunda escritura
+     * falla con {@code ObjectOptimisticLockingFailureException}, que el
+     * servicio traduce a {@code InvalidTokenException} (HTTP 401 generico,
+     * mismo mensaje que "token ya usado" — el cliente no distingue ambos
+     * casos, evitando un canal lateral de informacion).
+     *
+     * <p><b>Por que solo 1 de N debe tener exito (OWASP):</b> la regla
+     * "un solo uso" del reset token es una invariante de seguridad. Si
+     * dos requests pasan la validacion simultaneamente y ambos marcan
+     * el token como usado, el segundo request tambien actualizaria el
+     * password del usuario (al mismo valor o a uno distinto) y revocaria
+     * los refresh tokens. El impacto funcional es minimo (mismo password
+     * o diferente, en cualquier caso el resultado es seguro), pero la
+     * condicion de carrera es un bug logico que rompe la invariante
+     * "una operacion de reset por token".
+     */
+    @Version
+    @Column(name = "version")
+    private Long version;
 
     public PasswordResetToken() {
     }
@@ -116,5 +142,13 @@ public class PasswordResetToken {
 
     public void setCreatedAt(Instant createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public Long getVersion() {
+        return version;
+    }
+
+    public void setVersion(Long version) {
+        this.version = version;
     }
 }

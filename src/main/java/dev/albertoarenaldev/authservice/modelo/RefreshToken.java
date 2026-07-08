@@ -11,6 +11,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 
 import java.time.Instant;
 
@@ -57,6 +58,34 @@ public class RefreshToken {
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
+
+    /**
+     * Version para optimistic locking de Hibernate (auditoria finding #4,
+     * aplicado por consistencia con {@link PasswordResetToken}).
+     *
+     * <p>Protege contra dos races teoricas en el ciclo de vida del
+     * refresh token:
+     * <ul>
+     *   <li><b>Rotacion concurrente:</b> dos requests simultaneos con
+     *       el mismo refresh token (caso tipico de doble-click del
+     *       cliente). Sin @Version, ambos podrian leer el token viejo
+     *       y emitir uno nuevo, generando dos cadenas de rotacion
+     *       paralelas. Con @Version, el segundo UPDATE falla con
+     *       {@code ObjectOptimisticLockingFailureException}, que
+     *       {@link TokenService} traduce a {@code InvalidTokenException}
+     *       (HTTP 401).</li>
+     *   <li><b>Revocacion concurrente:</b> si dos procesos intentan
+     *       revocar el mismo token simultaneamente (e.g. logout
+     *       concurrente con deteccion de reuso), solo uno tendra exito.</li>
+     * </ul>
+     *
+     * <p>El impact funcional sin @Version era minimo (mismo hash, mismo
+     * usuario), pero la condicion de carrera rompia la invariante "una
+     * sola rotacion activa por token".
+     */
+    @Version
+    @Column(name = "version")
+    private Long version;
 
     public RefreshToken() {
     }
@@ -136,5 +165,13 @@ public class RefreshToken {
 
     public void setCreatedAt(Instant createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public Long getVersion() {
+        return version;
+    }
+
+    public void setVersion(Long version) {
+        this.version = version;
     }
 }
