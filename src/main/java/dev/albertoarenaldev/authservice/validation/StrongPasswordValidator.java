@@ -23,13 +23,29 @@ import jakarta.validation.ConstraintValidatorContext;
  * 4 — very unguessable: passphrases largas, contrasenas random &gt;= 16 chars
  * </pre>
  *
- * <p><b>Por que la instancia de {@link Zxcvbn} es final y se crea
- * una sola vez:</b> el constructor de {@code Zxcvbn} carga los
- * diccionarios (~20MB) desde el classpath. Spring instancia este
- * validador como singleton (los {@code ConstraintValidator} lo son
- * por contrato de Jakarta Bean Validation), asi que el cost de
- * carga se paga una sola vez al arrancar el contexto, no por cada
- * request.
+ * <p><b>Por que NO es un {@code @Component} de Spring:</b> Jakarta
+ * Bean Validation (JSR-380, seccion 3.4.2) exige que los
+ * {@code ConstraintValidator} sean singletons instanciados por el
+ * {@code ConstraintValidatorFactory} del contenedor, no por Spring.
+ * Esto significa que no se puede usar {@code @Autowired} ni otras
+ * anotaciones de Spring dentro del validator. La instanciacion es
+ * responsabilidad del framework, que garantiza el singleton.
+ *
+ * <p><b>Como llega la config ({@code app.security.password-policy.min-zxcvbn-score})
+ * al validator:</b> a traves de un campo estatico
+ * {@code volatile} inicializado UNA sola vez en el arranque de la
+ * aplicacion por {@code PasswordPolicyConfig} (que SI es un bean de
+ * Spring, puede inyectar la {@code @ConfigurationProperties} y llama
+ * al setter estatico). El modificador {@code volatile} garantiza
+ * visibilidad entre threads (cualquier cambio de configuracion se
+ * propaga a todos los threads que sirven requests).
+ *
+ * <p><b>Por que la instancia de {@link Zxcvbn} es final:</b> el
+ * constructor de {@code Zxcvbn} carga los diccionarios (~20MB)
+ * desde el classpath. El contrato singleton del JSR-380 garantiza
+ * que este constructor se invoca UNA sola vez por clase validator
+ * (no por cada peticion), asi que el cost de carga se paga una
+ * vez al instanciar el validator.
  *
  * <p><b>Por que delega en {@code @NotBlank} para presencia:</b> este
  * validador se enfoca en CALIDAD. Si el campo es null o vacio, retorna
@@ -40,19 +56,58 @@ import jakarta.validation.ConstraintValidatorContext;
 public class StrongPasswordValidator implements ConstraintValidator<StrongPassword, String> {
 
     /**
-     * Score minimo aceptado. 3 = "safely unguessable".
-     * Constante publica para que los tests y la documentacion la
-     * referencien sin magic numbers.
+     * Valor por defecto del umbral zxcvbn (3 = "safely unguessable").
+     * Se usa como fallback si {@link PasswordPolicyConfig} no consigue
+     * aplicar la config externa (e.g. en tests que no arrancan el
+     * contexto de Spring).
      */
-    public static final int MIN_SCORE = 3;
+    public static final int DEFAULT_MIN_SCORE = 3;
+
+    /**
+     * Umbral activo. Inicializado al default; {@code PasswordPolicyConfig}
+     * lo sobreescribe en el arranque con el valor de
+     * {@code app.security.password-policy.min-zxcvbn-score}. El modificador
+     * {@code volatile} garantiza visibilidad cross-thread: un cambio en
+     * runtime (poco probable pero posible via reconfiguracion dinamica)
+     * se propaga a todos los threads inmediatamente.
+     */
+    private static volatile int minScore = DEFAULT_MIN_SCORE;
 
     /**
      * Motor zxcvbn. La instancia es thread-safe segun el README de
      * zxcvbn4j (no mantiene estado mutable entre measure() calls).
-     * Como este validador es singleton, todos los threads del pool
-     * HTTP comparten esta misma instancia.
+     * Como este validator es singleton por contrato del JSR-380,
+     * todos los threads del pool HTTP comparten esta misma instancia.
      */
     private final Zxcvbn zxcvbn = new Zxcvbn();
+
+    /**
+     * Devuelve el umbral activo. Pensado para uso en tests (assertion
+     * messages) y para tooling/debug. NO usar como API publica desde
+     * otros servicios: el umbral es decision interna del validator.
+     */
+    public static int getMinScore() {
+        return minScore;
+    }
+
+    /**
+     * Establece el umbral activo. Pensado para que
+     * {@code PasswordPolicyConfig} lo invoque en el arranque. Tambien
+     * lo usan los tests que quieren verificar el comportamiento con
+     * un threshold custom (e.g. setMinScore(4) para probar que
+     * passphrases de 4 palabras que pasan con threshold 3 ahora
+     * fallan con threshold 4).
+     *
+     * @param score nuevo umbral, debe estar en [0, 4]
+     * @throws IllegalArgumentException si score esta fuera de rango
+     */
+    public static void setMinScore(int score) {
+        if (score < 0 || score > 4) {
+            throw new IllegalArgumentException(
+                    "minZxcvbnScore debe estar en [0, 4], se recibio: " + score);
+        }
+        minScore = score;
+    }
 
     @Override
     public boolean isValid(String value, ConstraintValidatorContext context) {
@@ -62,6 +117,6 @@ public class StrongPasswordValidator implements ConstraintValidator<StrongPasswo
             return true;
         }
         int score = zxcvbn.measure(value).getScore();
-        return score >= MIN_SCORE;
+        return score >= minScore;
     }
 }
