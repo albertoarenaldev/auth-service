@@ -34,10 +34,10 @@
 | **Fase 2** — Data model | ✅ | User, Role, RefreshToken, PasswordResetToken + tests (13 tests) |
 | **Fase 3** — Security infra | ✅ | JwtProperties, JwtTokenProvider, JwtAuthenticationFilter, JwtAuthenticationEntryPoint, SecurityConfig, PasswordEncoderConfig (16 tests) |
 | **Fase 4** — Endpoints | ✅ | register, login, refresh, logout + TokenService con rotacion, reuse detection y revocacion de familia (15 tests nuevos: 7 integracion + 8 unitarios) |
-| **Fase 5** — Password reset | ⏳ | Flujo completo con email token + endpoint público |
+| **Fase 5** — Password reset + hardening | ✅ | Flujo completo con email token + endpoint público + NIST zxcvbn + optimistic locking en tokens |
 | **Fase 6** — User profile | ⏳ | `GET/PUT /api/v1/users/me`, change password |
 
-**Tests:** 44/44 verde · **Java:** 21 · **Spring Boot:** 3.5.5
+**Tests:** 100/100 verde · **Java:** 21 · **Spring Boot:** 3.5.5
 
 ---
 
@@ -49,6 +49,8 @@
 | Framework | Spring Boot 3.5.5 |
 | Seguridad | Spring Security 6.x, JJWT 0.12.5 (HS256), BCrypt strength 12 |
 | Persistencia | JPA + Hibernate, H2 (dev/test), PostgreSQL (prod) |
+| Migraciones | Flyway 10+ (`V1__init_schema.sql`, `V2__add_version_column.sql`) + `ddl-auto: validate` |
+| Política de contraseña | zxcvbn4j 1.9.0 — NIST SP 800-63B (threshold score ≥ 3, configurable por `@ConfigurationProperties`) |
 | Build | Maven 3.9+ |
 | Tests | JUnit 5, AssertJ, MockMvc, @DataJpaTest |
 | Mail | Spring Mail (JavaMailSender) + MailHog (dev) |
@@ -233,7 +235,7 @@ mvn -B test -Dtest='*RepositoryTest'
 mvn -B test -X
 ```
 
-**Cobertura actual:** 44 tests · 100% passing · 0 flaky
+**Cobertura actual:** 100 tests · 100% passing · 0 flaky (15 clases: 79 `@Test` + 3 `@ParameterizedTest` expanden los 21 casos restantes)
 
 **Perfiles de test:**
 - `@DataJpaTest` — tests de repositorios con H2 aislada (UUID por test)
@@ -278,6 +280,10 @@ SPRING_MAIL_HOST=smtp.example.com
 SPRING_MAIL_PORT=587
 SPRING_MAIL_USERNAME=...
 SPRING_MAIL_PASSWORD=...
+
+# Política de contraseña (Nivel NIST SP 800-63B, default 3 = "safely unguessable")
+# Rango válido: 0 (muy débil) a 4 (muy fuerte). Cambiar sin redeploy.
+APP_SECURITY_PASSWORD_POLICY_MIN_ZXCVBN_SCORE=3
 ```
 
 ---
@@ -357,7 +363,7 @@ auth-service/
 | **Fase 2** | ✅ | Modelo de datos + repositorios + tests |
 | **Fase 3** | ✅ | Infraestructura JWT (filter, entry point, BCrypt, security config) |
 | **Fase 4** | ✅ | Endpoints de auth (register, login, refresh, logout) |
-| **Fase 5** | ⏳ | Password reset flow (request + confirm con email) |
+| **Fase 5** | ✅ | Password reset flow + NIST SP 800-63B password policy + optimistic locking en tokens de un solo uso |
 | **Fase 6** | ⏳ | User profile endpoints + change password |
 | **Fase 7** | ⏳ | Rate limiting (login attempts, password reset) |
 | **Fase 8** | ⏳ | Audit log (login events, password changes) |
