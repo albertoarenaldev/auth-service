@@ -210,6 +210,48 @@ docker compose up --build auth-service
 
 > ⚠️ **Las credenciales y `JWT_SECRET` del `docker-compose.yml` son valores de DESARROLLO.** Para producción, regenera el secret con `openssl rand -base64 48` y externaliza las credenciales de PostgreSQL/SMTP a tu plataforma de despliegue.
 
+#### 🐑 Multiples instancias en paralelo
+
+Todas las dependencias de nombres y puertos estan parametrizadas con env vars, asi que puedes correr 2 (o mas) copias del stack en el mismo host sin que pisen los nombres, los volumenes ni los puertos. Util para probar una migracion de BD en una instancia mientras la otra sigue corriendo, o para comparar 2 versiones de la app.
+
+**Variables de entorno disponibles** (todas con default que reproduce el comportamiento de una sola instancia):
+
+| Variable | Default | Proposito |
+|---|---|---|
+| `CONTAINER_NAME` | `auth-service` | Prefijo de los 3 `container_name`, el volumen de postgres y la red. Cambialo por instancia. |
+| `APP_PORT` | `8080` | Puerto host donde escucha la API REST. |
+| `POSTGRES_PORT` | `5432` | Puerto host de PostgreSQL (para psql, DBeaver, etc). |
+| `MAILHOG_SMTP_PORT` | `1025` | Puerto host del SMTP fake. |
+| `MAILHOG_WEB_PORT` | `8025` | Puerto host de la web UI de MailHog. |
+
+**Ejemplo copy-paste: 2 stacks en paralelo** (A con defaults, B desplazada a puertos `8081` / `5433` / `8026`):
+
+```bash
+# Instancia A — defaults, sin tocar nada
+docker compose -p auth-a up -d
+
+# Instancia B — prefijo distinto y puertos desplazados
+CONTAINER_NAME=auth-b APP_PORT=8081 POSTGRES_PORT=5433 MAILHOG_WEB_PORT=8026 \
+  docker compose -p auth-b up -d
+
+# Comprobar que ambas estan corriendo con sus nombres y puertos resueltos
+docker ps --format "table {{.Names}}\t{{.Ports}}" | grep -E "auth-(a|b)-"
+# auth-a-app      0.0.0.0:8080->8080/tcp
+# auth-a-mailhog  1025/tcp, 8025/tcp
+# auth-a-postgres 0.0.0.0:5432->5432/tcp
+# auth-b-app      0.0.0.0:8081->8080/tcp
+# auth-b-mailhog  1025/tcp, 8026/tcp
+# auth-b-postgres 0.0.0.0:5433->5432/tcp
+```
+
+**Notas operativas:**
+
+- El flag `-p` (project name) es obligatorio: aísla las redes y los volumenes entre proyectos Docker Compose, complementando el prefijo `CONTAINER_NAME`.
+- La comunicacion interna entre servicios usa los nombres de servicio (`postgres`, `mailhog`) por DNS, no los `container_name`. Cambiar `CONTAINER_NAME` no rompe la conexion app → db ni app → mailhog.
+- Cada instancia arranca con su propio volumen de postgres vacio, asi que la primera vez aplicara las migraciones de Flyway independientemente.
+- `APP_CORS_ORIGINS` apunta a los puertos tipicos de frontend (4200 Angular, 5173 Vite) y no necesita cambios al mover el puerto del backend.
+- Para parar una instancia concreta: `docker compose -p auth-b down` (con su `-p` para no afectar a la otra).
+
 ### ☕ Sin Docker
 
 Si prefieres correr la app directamente con Maven (más rápido para iterar en desarrollo, pero sin PostgreSQL ni MailHog):
