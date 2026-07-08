@@ -7,13 +7,13 @@ import dev.albertoarenaldev.authservice.modelo.User;
 import dev.albertoarenaldev.authservice.repository.PasswordResetTokenRepository;
 import dev.albertoarenaldev.authservice.repository.UserRepository;
 import dev.albertoarenaldev.authservice.security.JwtProperties;
-import dev.albertoarenaldev.authservice.service.email.EmailSender;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.Instant;
@@ -36,25 +36,25 @@ import static org.mockito.Mockito.when;
  * Tests unitarios de {@link PasswordResetService} con Mockito.
  *
  * <p>Aislan la logica de generacion/expiracion/canjeo de tokens de reset
- * de la capa de persistencia y de envio de correo. Las dependencias
+ * de la capa de persistencia y del envio de correo. Las dependencias
  * ({@link UserRepository}, {@link PasswordResetTokenRepository},
- * {@link EmailSender}, {@link PasswordEncoder},
+ * {@link PasswordEncoder}, {@link ApplicationEventPublisher},
  * {@link PasswordResetProperties}, {@link JwtProperties}) se mockean.
  *
- * <p><b>Por que NO usamos {@code @InjectMocks}:</b> el servicio cachea
- * el TTL como {@code long} leyendo {@link JwtProperties#getPasswordResetTokenExpirationMs()}
- * en el constructor. Mockito {@code @InjectMocks} instancia el servicio
- * ANTES de que cualquier {@code @BeforeEach} corra, lo que significa que
- * la llamada al mock en el constructor sucede con stubs sin definir
- * y cachea {@code 0L}. Para que el constructor vea el TTL correcto,
- * aplicamos el stub en {@link #setUp()} y construimos el servicio a mano.
+ * <p><b>Email sender NO se mockea aqui:</b> a partir del fix de timing
+ * (Fase 6), el servicio no llama directamente a {@code emailSender.send};
+ * publica un {@link PasswordResetRequestedEvent} que consume un listener
+ * asincrono. El comportamiento del envio se cubre en los integration
+ * tests de {@code AuthControllerIntegrationTest}, donde el
+ * {@code @MockBean EmailSender} captura el call desde el listener
+ * (que corre en el pool emailExecutor pero se sincroniza en tests
+ * con la finalizacion del request MockMvc).
  *
  * <p>Cubre los 2 metodos publicos:
  * <ul>
- *   <li>{@code forgotPassword} — 5 casos: existe/no-existe/normaliza/
- *       forma-seguro-del-token/expiry-igual-a-TTL-configurado.</li>
- *   <li>{@code resetPassword} — 5 casos: valido/ya-usado/expirado/
- *       usuario-deshabilitado/inexistente.</li>
+ *   <li>{@code forgotPassword} — happy path + edge cases + timing
+ *       equalization + token invalidation.</li>
+ *   <li>{@code resetPassword} — happy path + 4 casos de error.</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
@@ -68,11 +68,11 @@ class PasswordResetServiceTest {
 
     @Mock private UserRepository userRepository;
     @Mock private PasswordResetTokenRepository tokenRepository;
-    @Mock private EmailSender emailSender;
     @Mock private PasswordEncoder passwordEncoder;
     @Mock private TokenService tokenService;
     @Mock private PasswordResetProperties passwordResetProperties;
     @Mock private JwtProperties jwtProperties;
+    @Mock private ApplicationEventPublisher eventPublisher;
 
     private PasswordResetService passwordResetService;
 
@@ -97,12 +97,13 @@ class PasswordResetServiceTest {
         lenient().when(passwordResetProperties.getAppName()).thenReturn("Auth Service");
 
         // Constructor manual: ahora ve el TTL stubbeado (900s en vez de 0).
-        // El parametro TokenService es el sexto argumento (en orden
-        // repositorios → I/O → state-mutators → config).
+        // El orden de parametros tras el fix Fase 6 es: repositorios, state-
+        // mutators, config, eventPublisher (al final).
         passwordResetService = new PasswordResetService(
-                userRepository, tokenRepository, emailSender,
+                userRepository, tokenRepository,
                 passwordEncoder, tokenService,
-                passwordResetProperties, jwtProperties);
+                passwordResetProperties, jwtProperties,
+                eventPublisher);
     }
 
     // ============================================================
@@ -140,10 +141,10 @@ class PasswordResetServiceTest {
     private static final Pattern TOKEN_PARAM =
             Pattern.compile("\\?token=([A-Za-z0-9_-]+)");
 
-    private String extractRawTokenFromBody(String body) {
+    private String extractRawTokenFromEventBody(String body) {
         Matcher m = TOKEN_PARAM.matcher(body);
         assertThat(m.find())
-                .as("body should contain ?token=<raw> parameter")
+                .as("event body should contain ?token=<raw> parameter")
                 .isTrue();
         return m.group(1);
     }
@@ -153,7 +154,7 @@ class PasswordResetServiceTest {
     // ============================================================
 
     @Test
-    void forgotPassword_whenEmailExists_persistsHashedTokenAndSendsEmail() {
+    void forgotPassword_whenEmailExists_persistsHashedTokenAndPublishesEvent() {
         User user = sampleUser();
         when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(user));
         when(tokenRepository.save(any(PasswordResetToken.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -168,24 +169,35 @@ class PasswordResetServiceTest {
         assertThat(saved.getUsedAt()).isNull();
         assertThat(saved.getExpiresAt()).isAfter(Instant.now());
 
-        // Correo enviado: address correcto + cuerpo con el link al appName
-        ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
-        verify(emailSender).send(eq("alice@example.com"), anyString(), bodyCaptor.capture());
-        assertThat(bodyCaptor.getValue())
+        // Evento publicado (no SMTP directo): subject + body con el link al appName
+        ArgumentCaptor<PasswordResetRequestedEvent> eventCaptor =
+                ArgumentCaptor.forClass(PasswordResetRequestedEvent.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        PasswordResetRequestedEvent event = eventCaptor.getValue();
+        assertThat(event.email()).isEqualTo("alice@example.com");
+        assertThat(event.subject()).isEqualTo("Restablece tu contraseña");
+        assertThat(event.body())
                 .contains("Auth Service")
                 .contains("http://localhost:5173/reset-password?token=");
     }
 
     @Test
-    void forgotPassword_whenEmailDoesNotExist_returnsSilentlyWithoutSending() {
+    void forgotPassword_whenEmailDoesNotExist_returnsSilentlyWithoutSendingOrEvent() {
         when(userRepository.findByEmail("ghost@example.com")).thenReturn(Optional.empty());
+        // Dummy bcrypt: stub que devuelve un hash cualquiera; solo nos
+        // importa que SE LLAME para confirmar el timing equalization.
+        when(passwordEncoder.encode(anyString())).thenReturn("dummy-hash");
 
         passwordResetService.forgotPassword("ghost@example.com");
 
         // Silencio total al cliente (OWASP anti-enumeration): no persistir,
-        // no enviar correo.
+        // no enviar evento, no exponer al listener.
         verify(tokenRepository, never()).save(any(PasswordResetToken.class));
-        verify(emailSender, never()).send(anyString(), anyString(), anyString());
+        verify(eventPublisher, never()).publishEvent(any(PasswordResetRequestedEvent.class));
+
+        // Timing equalization: dummy bcrypt SE EJECUTA incluso cuando el
+        // usuario no existe, para igualar la latencia del path exitoso.
+        verify(passwordEncoder).encode(anyString());
     }
 
     @Test
@@ -207,13 +219,14 @@ class PasswordResetServiceTest {
 
         passwordResetService.forgotPassword("alice@example.com");
 
-        ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<PasswordResetRequestedEvent> eventCaptor =
+                ArgumentCaptor.forClass(PasswordResetRequestedEvent.class);
         ArgumentCaptor<PasswordResetToken> tokenCaptor = ArgumentCaptor.forClass(PasswordResetToken.class);
-        verify(emailSender).send(anyString(), anyString(), bodyCaptor.capture());
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
         verify(tokenRepository).save(tokenCaptor.capture());
 
-        // 1) raw token en el correo: 43 caracteres, Base64 URL-safe sin padding
-        String rawToken = extractRawTokenFromBody(bodyCaptor.getValue());
+        // 1) raw token en el event body: 43 caracteres, Base64 URL-safe sin padding
+        String rawToken = extractRawTokenFromEventBody(eventCaptor.getValue().body());
         assertThat(rawToken).hasSize(43);
 
         // 2) hash persistido: 64 chars hex (SHA-256 lowercase) — DISTINTO del raw
@@ -239,6 +252,41 @@ class PasswordResetServiceTest {
         Instant expiresAt = captor.getValue().getExpiresAt();
         assertThat(expiresAt).isAfter(before.plusMillis(TTL_MS - 1000));
         assertThat(expiresAt).isBefore(after.plusMillis(TTL_MS + 1000));
+    }
+
+    @Test
+    void forgotPassword_whenEmailExists_invalidatesPreviousActiveTokens() {
+        // Defense in depth: si el usuario pidio 3 resets, los 3 correos se
+        // envian pero solo el ultimo token es valido. El test verifica que
+        // el repositorio recibe la llamada de invalidacion ANTES de generar
+        // el token nuevo.
+        User user = sampleUser();
+        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(user));
+        when(tokenRepository.save(any(PasswordResetToken.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(tokenRepository.invalidateActiveTokensForUser(eq(1L), any(Instant.class))).thenReturn(2);
+
+        passwordResetService.forgotPassword("alice@example.com");
+
+        // El repositorio fue consultado para invalidar tokens previos
+        ArgumentCaptor<Instant> nowCaptor = ArgumentCaptor.forClass(Instant.class);
+        verify(tokenRepository).invalidateActiveTokensForUser(eq(1L), nowCaptor.capture());
+        assertThat(nowCaptor.getValue()).isBefore(Instant.now().plusSeconds(2));
+    }
+
+    @Test
+    void forgotPassword_whenNoPreviousTokens_invalidateReturnsZeroAndServiceProceeds() {
+        // Si el usuario nunca pidio un reset antes, invalidar no hace nada
+        // y el flujo continua normalmente (no se lanza excepcion).
+        User user = sampleUser();
+        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(user));
+        when(tokenRepository.save(any(PasswordResetToken.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(tokenRepository.invalidateActiveTokensForUser(eq(1L), any(Instant.class))).thenReturn(0);
+
+        passwordResetService.forgotPassword("alice@example.com");
+
+        verify(tokenRepository).invalidateActiveTokensForUser(eq(1L), any(Instant.class));
+        verify(tokenRepository).save(any(PasswordResetToken.class));
+        verify(eventPublisher).publishEvent(any(PasswordResetRequestedEvent.class));
     }
 
     // ============================================================

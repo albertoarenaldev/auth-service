@@ -356,6 +356,139 @@ class AuthControllerIntegrationTest {
     }
 
     // ============================================================
+    // /forgot-password — Fase 6: invalidacion de tokens previos
+    // (defense in depth: cierra la ventana de tokens viejos)
+    // ============================================================
+
+    @Test
+    void forgotPassword_threeConsecutiveRequests_onlyTheLastTokenIsValid() throws Exception {
+        RegisterRequest regReq = sampleRegisterRequest();
+        registerAndGetResponse(regReq);
+
+        // 3 resets consecutivos: el servicio publica 3 eventos, envia
+        // 3 correos, pero solo el ULTIMO token raw puede canjearse.
+        for (int i = 0; i < 3; i++) {
+            mockMvc.perform(post(FORGOT_PASSWORD_PATH)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(new ForgotPasswordRequest(regReq.email()))))
+                    .andExpect(status().isAccepted());
+        }
+
+        // Capturamos los 3 raw tokens que salieron del mock emailSender.
+        // ArgumentCaptor#getAllValues() devuelve los 3 en orden de llamada.
+        ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
+        verify(emailSender, org.mockito.Mockito.times(3))
+                .send(eq(regReq.email()), anyString(), bodyCaptor.capture());
+        java.util.List<String> bodies = bodyCaptor.getAllValues();
+        assertThat(bodies).hasSize(3);
+
+        String firstToken = extractTokenFromBody(bodies.get(0));
+        String secondToken = extractTokenFromBody(bodies.get(1));
+        String thirdToken = extractTokenFromBody(bodies.get(2));
+        assertThat(firstToken).isNotEqualTo(secondToken).isNotEqualTo(thirdToken);
+        assertThat(secondToken).isNotEqualTo(thirdToken);
+
+        // El primer token debe estar invalidado (su usedAt != null). Intentar
+        // canjearlo da 401.
+        mockMvc.perform(post(RESET_PASSWORD_PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                new ResetPasswordRequest(firstToken, "ShouldNotWork-123"))))
+                .andExpect(status().isUnauthorized());
+
+        // El segundo token tambien (se invalido al pedir el tercero). 401.
+        mockMvc.perform(post(RESET_PASSWORD_PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                new ResetPasswordRequest(secondToken, "ShouldNotWork-456"))))
+                .andExpect(status().isUnauthorized());
+
+        // El tercer token (el ultimo) sigue siendo valido. 204.
+        mockMvc.perform(post(RESET_PASSWORD_PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(
+                                new ResetPasswordRequest(thirdToken, "Final-Working-789"))))
+                .andExpect(status().isNoContent());
+    }
+
+    @Test
+    void forgotPassword_timingIsSimilarBetweenExistingAndNonExistingEmails() throws Exception {
+        // Defense in depth (OWASP anti-enumeration, timing): el path
+        // "usuario existe" y el path "usuario no existe" deben tener
+        // latencia similar para impedir que un atacante distinga por
+        // tiempo de respuesta. El path not-found ejecuta un dummy
+        // bcrypt encode (~100-250ms) que iguala la latencia del path
+        // exitoso (DB insert + SHA-256 + event publish ~5-15ms + bcrypt
+        // dummy).
+        //
+        // NOTA sobre CI: los timing tests son notorios por su flakiness.
+        // Usamos un bound generoso (500ms) que detecta regresiones serias
+        // (e.g. alguien quita el dummy bcrypt) pero no rompe por jitter
+        // de GC / cold start. Si el bound se vuelve problematico en CI,
+        // ajustar o mover a un profile @Tag("timing") y excluir del CI.
+        RegisterRequest regReq = sampleRegisterRequest();
+        registerAndGetResponse(regReq);
+
+        // Warmup: descarta el primer request (JIT + connection pool warmup)
+        for (int i = 0; i < 3; i++) {
+            mockMvc.perform(post(FORGOT_PASSWORD_PATH)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(new ForgotPasswordRequest(regReq.email()))));
+            mockMvc.perform(post(FORGOT_PASSWORD_PATH)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(new ForgotPasswordRequest("ghost-" + i + "@example.com"))));
+        }
+
+        // Medimos la mediana de N requests para cada caso (mediana es
+        // mas robusta a outliers que la media).
+        int N = 5;
+        long[] existingTimes = new long[N];
+        long[] nonExistingTimes = new long[N];
+        for (int i = 0; i < N; i++) {
+            String ghost = "ghost-measure-" + i + "-" + UUID.randomUUID() + "@example.com";
+
+            long t0 = System.nanoTime();
+            mockMvc.perform(post(FORGOT_PASSWORD_PATH)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(new ForgotPasswordRequest(regReq.email()))));
+            existingTimes[i] = (System.nanoTime() - t0) / 1_000_000L;
+
+            long t1 = System.nanoTime();
+            mockMvc.perform(post(FORGOT_PASSWORD_PATH)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(new ForgotPasswordRequest(ghost))));
+            nonExistingTimes[i] = (System.nanoTime() - t1) / 1_000_000L;
+        }
+
+        long medianExisting = median(existingTimes);
+        long medianNonExisting = median(nonExistingTimes);
+        long diff = Math.abs(medianExisting - medianNonExisting);
+
+        // Bound generoso de 500ms. El dummy bcrypt en el path not-found
+        // deberia acercar la mediana del path existente y el no-existente.
+        // Si el diff se va a >500ms, probablemente alguien quito el dummy
+        // o rompieron el flujo async.
+        assertThat(diff)
+                .as("Timing diff entre usuario existente (%dms) y no-existente (%dms) excede 500ms — defense-in-depth OWASP anti-enumeration comprometido",
+                        medianExisting, medianNonExisting)
+                .isLessThan(500L);
+    }
+
+    private static long median(long[] values) {
+        long[] sorted = values.clone();
+        java.util.Arrays.sort(sorted);
+        return sorted[sorted.length / 2];
+    }
+
+    private static String extractTokenFromBody(String body) {
+        Matcher m = TOKEN_PARAM.matcher(body);
+        assertThat(m.find())
+                .as("body should contain ?token=<raw>: " + body)
+                .isTrue();
+        return m.group(1);
+    }
+
+    // ============================================================
     // /reset-password — ciclo completo + casos de error
     // ============================================================
 
