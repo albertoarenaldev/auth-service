@@ -20,6 +20,7 @@
 - [Arquitectura](#-arquitectura)
 - [Endpoints](#-endpoints)
 - [Desarrollo local](#-desarrollo-local)
+  - [Con Docker Compose (recomendado)](#-con-docker-compose-recomendado)
 - [Tests](#-tests)
 - [CI / Deployment](#-ci--deployment)
 - [Estructura del proyecto](#-estructura-del-proyecto)
@@ -58,6 +59,7 @@
 | Tests | JUnit 5, AssertJ, MockMvc, @DataJpaTest |
 | Mail | Spring Mail (JavaMailSender) + MailHog (dev) |
 | CI | GitHub Actions (Ubuntu + Temurin JDK 21) |
+| Contenedores | Docker (multi-stage) + Docker Compose (PostgreSQL 16 + MailHog) |
 | Config | 12-factor (env vars, perfiles Spring) |
 
 ---
@@ -154,27 +156,82 @@ Header `WWW-Authenticate: Bearer realm="auth-service"` siempre presente en 401.
 
 ## 💻 Desarrollo local
 
-### Requisitos
+Tienes dos formas de arrancar el proyecto en local:
 
-- Java 21 (Temurin recomendado)
-- Maven 3.9+
-- Docker (opcional, para MailHog)
+- **🐳 Con Docker Compose (recomendado)** — un único comando levanta la app + PostgreSQL 16 + MailHog.
+- **☕ Sin Docker** — solo necesitas Java 21 y Maven 3.9+; usa H2 en memoria en vez de PostgreSQL.
 
-### Setup
+### 🐳 Con Docker Compose (recomendado)
+
+**Requisitos:** solo [Docker](https://docs.docker.com/get-docker/) (Docker Desktop o el engine de Linux). No necesitas Java, ni Maven, ni PostgreSQL local.
+
+**Setup (un solo comando):**
+
+```bash
+git clone https://github.com/albertoarenaldev/auth-service.git
+cd auth-service
+docker compose up --build
+```
+
+La primera vez tarda 1-2 minutos (descarga imágenes de Maven/Temurin/Postgres/MailHog y compila el jar). Las siguientes son instantáneas gracias a la cache de capas de Docker y a la cache de dependencias Maven separada.
+
+**Qué se levanta:**
+
+| Servicio | Puerto | URL | Credenciales |
+|---|---|---|---|
+| `auth-service` (Spring Boot) | 8080 | http://localhost:8080 | — |
+| `postgres` (PostgreSQL 16) | 5432 | `jdbc:postgresql://localhost:5432/authdb` | `authuser` / `authpass` / db `authdb` |
+| `mailhog` (SMTP fake + Web UI) | 1025 / 8025 | SMTP en `localhost:1025` · Web UI en http://localhost:8025 | sin auth |
+
+**Comandos útiles:**
+
+```bash
+# Ver logs de la app (follow)
+docker compose logs -f auth-service
+
+# Ver logs de un servicio concreto
+docker compose logs -f postgres
+
+# Parar todo (conserva el volumen de postgres con tus datos)
+docker compose down
+
+# Parar todo Y borrar el volumen de postgres (reset completo)
+docker compose down -v
+
+# Entrar a un contenedor para debug
+docker compose exec auth-service sh
+docker compose exec postgres psql -U authuser -d authdb
+
+# Rebuild de la app tras cambiar codigo
+docker compose up --build auth-service
+```
+
+**Cómo sabe la app que use PostgreSQL y MailHog:** el `docker-compose.yml` fija `SPRING_PROFILES_ACTIVE=prod` y sobreescribe los parámetros de mail para apuntar a MailHog (sin auth, sin TLS). El resto de la configuración (datasource URL, credenciales, JWT secret) también viene del compose vía env vars (12-factor).
+
+> ⚠️ **Las credenciales y `JWT_SECRET` del `docker-compose.yml` son valores de DESARROLLO.** Para producción, regenera el secret con `openssl rand -base64 48` y externaliza las credenciales de PostgreSQL/SMTP a tu plataforma de despliegue.
+
+### ☕ Sin Docker
+
+Si prefieres correr la app directamente con Maven (más rápido para iterar en desarrollo, pero sin PostgreSQL ni MailHog):
+
+**Requisitos:** Java 21 (Temurin) y Maven 3.9+.
 
 ```bash
 git clone https://github.com/albertoarenaldev/auth-service.git
 cd auth-service
 
-# Sin Docker (usa SMTP mock o desactiva MailHealth)
-mvn spring-boot:run -Dspring-boot.run.profiles=dev
-
-# Con MailHog (para probar envío de emails reales)
-docker run -d --name mailhog -p 1025:1025 -p 8025:8025 mailhog/mailhog
+# Levanta la app con perfil `dev` (H2 en memoria + sin mail real)
 mvn spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
 La app arranca en `http://localhost:8080`.
+
+**Si quieres probar el envío de emails** sin Docker, arranca MailHog con un único comando y luego la app:
+
+```bash
+docker run -d --name mailhog -p 1025:1025 -p 8025:8025 mailhog/mailhog
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
+```
 
 ### Probar endpoints
 
