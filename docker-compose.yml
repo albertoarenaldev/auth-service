@@ -1,0 +1,122 @@
+# =====================================================================
+# Auth Service — docker-compose para desarrollo local
+# =====================================================================
+# Levanta la aplicacion + PostgreSQL 16 (con volumen persistente) + MailHog
+# (SMTP fake con web UI para visualizar los emails enviados).
+#
+# Uso:
+#   docker compose up --build    # arranca todo (build de la app la primera vez)
+#   docker compose up -d         # arranca en background (detached)
+#   docker compose down          # para todos los servicios (conserva el volumen)
+#   docker compose down -v       # para todo Y borra el volumen de postgres
+#   docker compose logs -f auth-service   # ver logs de la app
+#
+# Endpoints una vez levantado (http://localhost):
+#   - 8080  -> API REST de auth-service
+#   - 8025  -> Web UI de MailHog (ver emails enviados)
+#   - 5432  -> PostgreSQL (psql -U authuser -d authdb -h localhost)
+#
+# IMPORTANTE: las credenciales y JWT_SECRET son valores de DESARROLLO.
+# NO usar tal cual en produccion. Regenerar con `openssl rand -base64 48`.
+# =====================================================================
+
+services:
+  # -------------------------------------------------------------------
+  # PostgreSQL 16 — base de datos principal
+  # -------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: auth-service-postgres
+    environment:
+      POSTGRES_DB: authdb
+      POSTGRES_USER: authuser
+      POSTGRES_PASSWORD: authpass
+    ports:
+      - "5432:5432"   # expuesto al host para que puedas usar psql/DBeaver/etc
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authuser -d authdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - auth-network
+
+  # -------------------------------------------------------------------
+  # MailHog — SMTP fake + web UI para visualizar los emails enviados
+  # -------------------------------------------------------------------
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: auth-service-mailhog
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # Web UI: http://localhost:8025
+    networks:
+      - auth-network
+
+  # -------------------------------------------------------------------
+  # auth-service — la app Spring Boot
+  # -------------------------------------------------------------------
+  # Perfil `prod` (configura PostgreSQL y desactiva el H2 console de dev),
+  # con overrides de mail para apuntar a MailHog en vez de un SMTP real.
+  # Los env vars usan el formato SPRING_DATASOURCE_URL etc., que Spring
+  # Boot mapea automaticamente a las propiedades (relaxed binding).
+  # -------------------------------------------------------------------
+  auth-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: auth-service-app
+    depends_on:
+      postgres:
+        condition: service_healthy   # espera a que pg_isready devuelva OK
+      mailhog:
+        condition: service_started   # mailhog no tiene healthcheck oficial
+    environment:
+      # ---- Perfil activo ----
+      SPRING_PROFILES_ACTIVE: prod
+
+      # ---- Conexion a PostgreSQL (servicio `postgres` resuelto por DNS interno) ----
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/authdb
+      SPRING_DATASOURCE_USERNAME: authuser
+      SPRING_DATASOURCE_PASSWORD: authpass
+
+      # ---- Conexion a MailHog (sin auth, sin STARTTLS) ----
+      SPRING_MAIL_HOST: mailhog
+      SPRING_MAIL_PORT: "1025"
+      SPRING_MAIL_USERNAME: ""
+      SPRING_MAIL_PASSWORD: ""
+      # Spring relaxed binding: SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH=false
+      # sobreescribe `spring.mail.properties.mail.smtp.auth=true` del perfil prod.
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH: "false"
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE: "false"
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_REQUIRED: "false"
+
+      # ---- JWT (valor de dev, regenerar para produccion real con `openssl rand -base64 48`) ----
+      JWT_SECRET: docker-dev-secret-please-change-in-production-this-is-32-bytes-min-ok
+
+      # ---- CORS para clientes locales comunes (Angular 4200, Vite 5173) ----
+      APP_CORS_ORIGINS: http://localhost:4200,http://localhost:5173
+
+      # ---- Zona horaria UTC (consistencia de timestamps JWT/tokens/BD) ----
+      TZ: UTC
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    networks:
+      - auth-network
+
+# =====================================================================
+# Volumenes y redes
+# =====================================================================
+
+volumes:
+  postgres_data:
+    name: auth-service-postgres-data   # nombre fijo (sobrevive a `docker compose down`)
+
+networks:
+  auth-network:
+    name: auth-service-network
+    driver: bridge
