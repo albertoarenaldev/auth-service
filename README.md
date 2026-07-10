@@ -39,9 +39,9 @@
 | **Fase 3** — Security infra | ✅ | JwtProperties, JwtTokenProvider, JwtAuthenticationFilter, JwtAuthenticationEntryPoint, SecurityConfig, PasswordEncoderConfig (16 tests) |
 | **Fase 4** — Endpoints | ✅ | register, login, refresh, logout + TokenService con rotacion, reuse detection y revocacion de familia (15 tests nuevos: 7 integracion + 8 unitarios) |
 | **Fase 5** — Password reset + hardening | ✅ | Flujo completo con email token + endpoint público + NIST zxcvbn + optimistic locking en tokens |
-| **Fase 6** — User profile | ⏳ | `GET/PUT /api/v1/users/me`, change password |
+| **Fase 6** — User profile | ✅ | `GET/PUT /api/v1/users/me`, `POST /me/password` con revocacion de sesiones OWASP + tests (16 tests nuevos) |
 
-**Tests:** 100/100 verde · **Cobertura:** 95% line · 89% branch · 100% class (JaCoCo 0.8.11 sobre `mvn verify`) · **Java:** 21 · **Spring Boot:** 3.5.5
+**Tests:** 118/118 verde · **Cobertura:** 95% line · 89% branch · 100% class (JaCoCo 0.8.11 sobre `mvn verify`) · **Java:** 21 · **Spring Boot:** 3.5.5
 
 ---
 
@@ -132,13 +132,15 @@ Claims del JWT:
 | `GET` | `/actuator/health` | público | Health check agregado (DB, disk, mail) |
 | `GET` | `/actuator/info` | 🔒 autenticado | Metadata del build (protegido para evitar info leak) |
 
+| `GET` | `/api/v1/users/me` | 🔒 autenticado | Perfil del usuario actual. Requiere JWT valido en `Authorization: Bearer` |
+| `PUT` | `/api/v1/users/me` | 🔒 autenticado | Actualizar nombre y apellido: `{firstName, lastName}` → 200 + perfil actualizado |
+| `POST` | `/api/v1/users/me/password` | 🔒 autenticado | Cambiar contraseña: `{currentPassword, newPassword}` → 204. Revoca todas las sesiones activas (OWASP ASVS V3.5) |
+
 ### Planificados (V1.1)
 
 | Método | Path | Auth | Descripción |
 |---|---|---|---|
-| `GET` | `/api/v1/users/me` | 🔒 autenticado | Perfil del usuario actual |
-| `PUT` | `/api/v1/users/me` | 🔒 autenticado | Actualizar perfil |
-| `POST` | `/api/v1/users/me/password` | 🔒 autenticado | Cambiar contraseña |
+| `POST` | `/api/v1/auth/verify-email` | público | Verificar email tras registro |
 
 **Formato de respuesta 401 (RFC 6750):**
 ```json
@@ -401,7 +403,7 @@ mvn -B test -X
 
 **Cobertura actual:**
 
-- **Tests:** 100 / 100 passing · 0 flaky (15 clases: 79 `@Test` + 3 `@ParameterizedTest` expanden los 21 casos restantes)
+- **Tests:** 118 / 118 passing · 0 flaky (18 clases: 94 `@Test` + 3 `@ParameterizedTest` expanden los 24 casos restantes)
 - **Line coverage (JaCoCo):** 95% — 362 de 382 lineas cubiertas por los tests
 - **Branch coverage:** 89% — 136 de 152 ramas cubiertas
 - **Class coverage:** 100% — los 40 classes del main tienen al menos un test que invoca su codigo (medicion a nivel de "clase tocada", NO garantiza que todas las lineas o ramas esten ejercitadas; para eso mirar line/branch coverage arriba)
@@ -489,8 +491,37 @@ auth-service/
 │   │   │   │   ├── JwtTokenProvider.java
 │   │   │   │   ├── JwtAuthenticationFilter.java
 │   │   │   │   └── JwtAuthenticationEntryPoint.java
+│   │   │   ├── dto/                    # Request/Response records
+│   │   │   │   ├── AuthResponse.java
+│   │   │   │   ├── ChangePasswordRequest.java
+│   │   │   │   ├── ErrorResponse.java
+│   │   │   │   ├── ForgotPasswordRequest.java
+│   │   │   │   ├── LoginRequest.java
+│   │   │   │   ├── RefreshRequest.java
+│   │   │   │   ├── RegisterRequest.java
+│   │   │   │   ├── ResetPasswordRequest.java
+│   │   │   │   ├── UpdateProfileRequest.java
+│   │   │   │   └── UserResponse.java
+│   │   │   ├── exception/              # Domain exceptions + global handler
+│   │   │   │   ├── EmailAlreadyExistsException.java
+│   │   │   │   ├── GlobalExceptionHandler.java
+│   │   │   │   ├── InvalidCredentialsException.java
+│   │   │   │   └── InvalidTokenException.java
+│   │   │   ├── service/                # Business logic
+│   │   │   │   ├── AuthService.java
+│   │   │   │   ├── PasswordResetService.java
+│   │   │   │   ├── TokenService.java
+│   │   │   │   ├── SecureTokenHasher.java
+│   │   │   │   └── email/
+│   │   │   │       ├── EmailSender.java
+│   │   │   │       ├── NoOpEmailSender.java
+│   │   │   │       └── SmtpEmailSender.java
+│   │   │   ├── validation/             # Custom Bean Validation
+│   │   │   │   ├── StrongPassword.java
+│   │   │   │   └── StrongPasswordValidator.java
 │   │   │   └── web/                    # REST controllers
-│   │   │       └── AuthController.java
+│   │   │       ├── AuthController.java
+│   │   │       └── UserController.java
 │   │   └── resources/
 │   │       ├── application.properties          # Config base
 │   │       ├── application-dev.properties      # Perfil dev
@@ -505,6 +536,16 @@ auth-service/
 │           │   ├── UserRepositoryTest.java
 │           │   ├── RefreshTokenRepositoryTest.java
 │           │   └── PasswordResetTokenRepositoryTest.java
+│           ├── service/
+│           │   ├── AuthServiceTest.java
+│           │   ├── PasswordResetServiceTest.java
+│           │   ├── PasswordResetServiceRaceConditionTest.java
+│           │   └── TokenServiceTest.java
+│           ├── validation/
+│           │   └── StrongPasswordValidatorTest.java
+│           ├── web/
+│           │   ├── AuthControllerIntegrationTest.java
+│           │   └── UserControllerIntegrationTest.java
 │           └── security/
 │               ├── JwtPropertiesTest.java
 │               ├── JwtTokenProviderTest.java
@@ -535,7 +576,7 @@ auth-service/
 | **Fase 3** | ✅ | Infraestructura JWT (filter, entry point, BCrypt, security config) |
 | **Fase 4** | ✅ | Endpoints de auth (register, login, refresh, logout) |
 | **Fase 5** | ✅ | Password reset flow + NIST SP 800-63B password policy + optimistic locking en tokens de un solo uso |
-| **Fase 6** | ⏳ | User profile endpoints + change password |
+| **Fase 6** | ✅ | User profile endpoints + change password + revocacion de sesiones OWASP |
 | **Fase 7** | ⏳ | Rate limiting (login attempts, password reset) |
 | **Fase 8** | ⏳ | Audit log (login events, password changes) |
 | **Fase 9** | ⏳ | OAuth2 / OIDC (login con Google, GitHub) |
