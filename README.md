@@ -42,6 +42,7 @@
 | **Fase 6** — User profile | ✅ | `GET/PUT /api/v1/users/me`, `POST /me/password` con revocacion de sesiones OWASP + tests (16 tests nuevos) |
 | **Email verification** | ✅ | Flujo de verificacion de email al registro: token opaco SHA-256, envio asincrono, `GET /verify-email?token=`, `POST /resend-verification` |
 | **Fase 7** — Rate limiting | ✅ | Bucket4j token-bucket en `/login` (5/min) y `/forgot-password` (3/5min), IP-based, toggle `app.rate-limit.enabled` |
+| **Fase 8** — Audit log | ✅ | Tabla `audit_events` append-only con 11 tipos de eventos: login, password, tokens, verificacion |
 
 **Tests:** 129/129 verde · **Cobertura:** 95% line · 89% branch · 100% class (JaCoCo 0.8.11 sobre `mvn verify`) · **Java:** 21 · **Spring Boot:** 3.5.5
 
@@ -55,7 +56,7 @@
 | Framework | Spring Boot 3.5.5 |
 | Seguridad | Spring Security 6.x, JJWT 0.12.5 (HS256), BCrypt strength 12 |
 | Persistencia | JPA + Hibernate, H2 (dev/test), PostgreSQL (prod) |
-| Migraciones | Flyway 10+ (`V1__init_schema.sql`, `V2__add_version_column.sql`, `V3__add_email_verification_tokens.sql`) + `ddl-auto: validate` |
+| Migraciones | Flyway 10+ (`V1`, `V2`, `V3`, `V4`) + `ddl-auto: validate` |
 | Política de contraseña | zxcvbn4j 1.9.0 — NIST SP 800-63B (threshold score ≥ 3, configurable por `@ConfigurationProperties`) |
 | Build | Maven 3.9+ |
 | Tests | JUnit 5, AssertJ, MockMvc, @DataJpaTest |
@@ -582,7 +583,7 @@ auth-service/
 | **Fase 5** | ✅ | Password reset flow + NIST SP 800-63B password policy + optimistic locking en tokens de un solo uso |
 | **Fase 6** | ✅ | User profile endpoints + change password + revocacion de sesiones OWASP |
 | **Fase 7** | ✅ | Rate limiting con Bucket4j en /login (5/min) y /forgot-password (3/5min), IP-based |
-| **Fase 8** | ⏳ | Audit log (login events, password changes) |
+| **Fase 8** | ✅ | Audit log con 11 tipos de eventos (login, password, tokens, verificacion) |
 | **Fase 9** | ⏳ | OAuth2 / OIDC (login con Google, GitHub) |
 
 ---
