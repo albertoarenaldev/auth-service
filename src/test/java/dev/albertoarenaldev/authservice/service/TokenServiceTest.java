@@ -9,6 +9,7 @@ import dev.albertoarenaldev.authservice.security.JwtProperties;
 import dev.albertoarenaldev.authservice.security.JwtTokenProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import io.micrometer.core.instrument.Counter;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -44,6 +45,8 @@ class TokenServiceTest {
     @Mock private JwtTokenProvider jwtTokenProvider;
     @Mock private JwtProperties jwtProperties;
     @Mock private AuditService auditService;
+    @Mock private Counter tokenRefreshCounter;
+    @Mock private Counter tokenReuseCounter;
 
     @InjectMocks private TokenService tokenService;
 

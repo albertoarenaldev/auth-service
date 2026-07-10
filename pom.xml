@@ -120,6 +120,12 @@
             <version>8.10.1</version>
         </dependency>
 
+        <!-- Métricas — Micrometer + Prometheus -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
         <!-- OAuth2 / OIDC — login con Google, GitHub, etc. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

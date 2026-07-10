@@ -21,6 +21,7 @@ import dev.albertoarenaldev.authservice.security.JwtProperties;
 import dev.albertoarenaldev.authservice.service.TokenService.TokenPair;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import io.micrometer.core.instrument.Counter;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -58,6 +59,11 @@ class AuthServiceTest {
     @Mock private JwtProperties jwtProperties;
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private AuditService auditService;
+
+    @Mock(name = "loginSuccessCounter") private Counter loginSuccessCounter;
+    @Mock(name = "loginFailureCounter") private Counter loginFailureCounter;
+    @Mock(name = "registerCounter") private Counter registerCounter;
+    @Mock(name = "emailVerifiedCounter") private Counter emailVerifiedCounter;
 
     @InjectMocks private AuthService authService;
 

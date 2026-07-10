@@ -1,6 +1,7 @@
 package dev.albertoarenaldev.authservice.service;
 
 import dev.albertoarenaldev.authservice.exception.InvalidTokenException;
+import io.micrometer.core.instrument.Counter;
 import dev.albertoarenaldev.authservice.modelo.AuditEventType;
 import dev.albertoarenaldev.authservice.modelo.RefreshToken;
 import dev.albertoarenaldev.authservice.modelo.User;
@@ -61,15 +62,21 @@ public class TokenService {
     private final JwtTokenProvider jwtTokenProvider;
     private final long refreshTtlMs;
     private final AuditService auditService;
+    private final Counter tokenRefreshCounter;
+    private final Counter tokenReuseCounter;
 
     public TokenService(RefreshTokenRepository refreshTokenRepository,
                         JwtTokenProvider jwtTokenProvider,
                         JwtProperties jwtProperties,
-                        AuditService auditService) {
+                        AuditService auditService,
+                        Counter tokenRefreshCounter,
+                        Counter tokenReuseCounter) {
         this.refreshTokenRepository = refreshTokenRepository;
         this.jwtTokenProvider = jwtTokenProvider;
         this.refreshTtlMs = jwtProperties.getRefreshTokenExpirationMs();
         this.auditService = auditService;
+        this.tokenRefreshCounter = tokenRefreshCounter;
+        this.tokenReuseCounter = tokenReuseCounter;
     }
 
     // ============================================================
@@ -147,6 +154,7 @@ public class TokenService {
                         old.getUser().getId());
                 auditService.record(AuditEventType.TOKEN_REUSE_DETECTED, old.getUser(),
                         "token_id=" + old.getId());
+                tokenReuseCounter.increment();
                 this.revokeAllForUser(old.getUser().getId());
                 // Mensaje generico para no leakear al cliente la razon del fallo.
                 // El log.warn de arriba mantiene la distincion server-side.
@@ -185,6 +193,7 @@ public class TokenService {
         log.debug("Rotated refresh token for user id={}", old.getUser().getId());
         auditService.record(AuditEventType.TOKEN_REFRESHED, old.getUser(),
                 "old_token_id=" + old.getId() + " new_token_id=" + newEntity.getId());
+        tokenRefreshCounter.increment();
         return new TokenPair(newAccess, newRaw, old.getUser());
     }
 

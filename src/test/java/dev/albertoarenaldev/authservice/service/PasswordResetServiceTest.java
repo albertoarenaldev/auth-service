@@ -10,6 +10,7 @@ import dev.albertoarenaldev.authservice.security.JwtProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import io.micrometer.core.instrument.Counter;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -74,6 +75,8 @@ class PasswordResetServiceTest {
     @Mock private JwtProperties jwtProperties;
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private AuditService auditService;
+    @Mock private Counter passwordResetRequestedCounter;
+    @Mock private Counter passwordResetCompletedCounter;
 
     private PasswordResetService passwordResetService;
 
@@ -104,7 +107,8 @@ class PasswordResetServiceTest {
                 userRepository, tokenRepository,
                 passwordEncoder, tokenService,
                 passwordResetProperties, jwtProperties,
-                eventPublisher, auditService);
+                eventPublisher, auditService,
+                passwordResetRequestedCounter, passwordResetCompletedCounter);
     }
 
     // ============================================================

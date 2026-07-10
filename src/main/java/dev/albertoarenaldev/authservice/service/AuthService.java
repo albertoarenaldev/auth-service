@@ -20,6 +20,7 @@ import dev.albertoarenaldev.authservice.repository.RoleRepository;
 import dev.albertoarenaldev.authservice.repository.UserRepository;
 import dev.albertoarenaldev.authservice.security.JwtProperties;
 import dev.albertoarenaldev.authservice.service.TokenService.TokenPair;
+import io.micrometer.core.instrument.Counter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -93,6 +94,10 @@ public class AuthService {
     private final long verificationTokenExpirationMs;
     private final ApplicationEventPublisher eventPublisher;
     private final AuditService auditService;
+    private final Counter loginSuccessCounter;
+    private final Counter loginFailureCounter;
+    private final Counter registerCounter;
+    private final Counter emailVerifiedCounter;
 
     public AuthService(UserRepository userRepository,
                        RoleRepository roleRepository,
@@ -102,7 +107,11 @@ public class AuthService {
                        PasswordResetProperties resetProperties,
                        JwtProperties jwtProperties,
                        ApplicationEventPublisher eventPublisher,
-                       AuditService auditService) {
+                       AuditService auditService,
+                       Counter loginSuccessCounter,
+                       Counter loginFailureCounter,
+                       Counter registerCounter,
+                       Counter emailVerifiedCounter) {
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
         this.tokenService = tokenService;
@@ -112,6 +121,10 @@ public class AuthService {
         this.verificationTokenExpirationMs = jwtProperties.getEmailVerificationTokenExpirationMs();
         this.eventPublisher = eventPublisher;
         this.auditService = auditService;
+        this.loginSuccessCounter = loginSuccessCounter;
+        this.loginFailureCounter = loginFailureCounter;
+        this.registerCounter = registerCounter;
+        this.emailVerifiedCounter = emailVerifiedCounter;
     }
 
     // ============================================================
@@ -155,6 +168,7 @@ public class AuthService {
         User saved = userRepository.save(user);
         log.info("Registered new user id={} email={} (pending email verification)", saved.getId(), saved.getEmail());
         auditService.record(AuditEventType.REGISTER, saved, "email=" + saved.getEmail());
+        registerCounter.increment();
 
         // Generar token de verificacion y publicar evento para envio de email.
         // El listener lo consume en el pool emailExecutor tras el commit.
@@ -217,6 +231,7 @@ public class AuthService {
         userRepository.save(user);
         log.info("Email verified for user id={} email={}", user.getId(), user.getEmail());
         auditService.record(AuditEventType.EMAIL_VERIFIED, user, "email=" + user.getEmail());
+        emailVerifiedCounter.increment();
 
         return buildAuthResponse(user);
     }
@@ -249,6 +264,7 @@ public class AuthService {
         if (!passwordOk || !user.isEnabled()) {
             log.warn("Failed login attempt for email={}", req.email());
             auditService.record(AuditEventType.LOGIN_FAILURE, AuditService.getClientIp(), "email=" + req.email());
+            loginFailureCounter.increment();
             throw new InvalidCredentialsException();
         }
 
@@ -256,6 +272,7 @@ public class AuthService {
         userRepository.save(user);
         log.info("User id={} logged in successfully", user.getId());
         auditService.record(AuditEventType.LOGIN_SUCCESS, user, "email=" + user.getEmail());
+        loginSuccessCounter.increment();
 
         return buildAuthResponse(user);
     }
@@ -426,6 +443,7 @@ public class AuthService {
             user.setLastLoginAt(Instant.now());
             userRepository.save(user);
             auditService.record(AuditEventType.LOGIN_SUCCESS, user, "method=oauth2");
+            loginSuccessCounter.increment();
             return buildAuthResponse(user);
         }
 
@@ -447,8 +465,8 @@ public class AuthService {
         newUser.addRole(defaultRole);
 
         User saved = userRepository.save(newUser);
-        log.info("Created new user via OAuth2: id={} email={}", saved.getId(), email);
-        auditService.record(AuditEventType.REGISTER, saved, "email=" + saved.getEmail() + " method=oauth2");
+        log.info("Created new user via OAuth2: id={} email={}", saved.getId(), email);            auditService.record(AuditEventType.REGISTER, saved, "email=" + saved.getEmail() + " method=oauth2");
+            loginSuccessCounter.increment();
 
         return buildAuthResponse(saved);
     }
