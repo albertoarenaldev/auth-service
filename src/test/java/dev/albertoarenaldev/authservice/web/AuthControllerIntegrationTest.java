@@ -57,6 +57,7 @@ class AuthControllerIntegrationTest {
     private static final String REFRESH_PATH = "/api/v1/auth/refresh";
     private static final String LOGOUT_PATH = "/api/v1/auth/logout";
     private static final String VERIFY_EMAIL_PATH = "/api/v1/auth/verify-email";
+    private static final String RESEND_VERIFICATION_PATH = "/api/v1/auth/resend-verification";
     private static final String FORGOT_PASSWORD_PATH = "/api/v1/auth/forgot-password";
     private static final String RESET_PASSWORD_PATH = "/api/v1/auth/reset-password";
 
@@ -344,6 +345,67 @@ class AuthControllerIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(logoutReq)))
                 .andExpect(status().isUnauthorized());
+    }
+
+    // ============================================================
+    // /resend-verification
+    // ============================================================
+
+    @Test
+    void resendVerification_withUnverifiedUser_returns202AndSendsEmail() throws Exception {
+        RegisterRequest req = sampleRegisterRequest();
+        mockMvc.perform(post(REGISTER_PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isCreated());
+
+        // Primer email fue el de registro. Pedir reenvio.
+        mockMvc.perform(post(RESEND_VERIFICATION_PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new ForgotPasswordRequest(req.email()))))
+                .andExpect(status().isAccepted());
+
+        // Se envio un segundo email (el de reenvio)
+        ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
+        verify(emailSender, org.mockito.Mockito.atLeast(2))
+                .send(eq(req.email()), anyString(), bodyCaptor.capture());
+        java.util.List<String> bodies = bodyCaptor.getAllValues();
+        assertThat(extractTokenFromBody(bodies.get(bodies.size() - 1))).hasSize(43);
+    }
+
+    @Test
+    void resendVerification_withNonExistentEmail_returns202WithoutSendingEmail() throws Exception {
+        String ghost = "ghost-" + UUID.randomUUID() + "@example.com";
+        mockMvc.perform(post(RESEND_VERIFICATION_PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new ForgotPasswordRequest(ghost))))
+                .andExpect(status().isAccepted());
+
+        verify(emailSender, never()).send(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void resendVerification_withAlreadyVerifiedUser_returns202WithoutSendingEmail() throws Exception {
+        RegisterRequest req = sampleRegisterRequest();
+        mockMvc.perform(post(REGISTER_PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isCreated());
+
+        // Verificar email
+        String rawToken = captureResetTokenFromLastEmail(req.email());
+        mockMvc.perform(get(VERIFY_EMAIL_PATH).param("token", rawToken))
+                .andExpect(status().isOk());
+
+        // Pedir reenvio sobre usuario ya verificado: 202 pero sin nuevo email
+        mockMvc.perform(post(RESEND_VERIFICATION_PATH)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new ForgotPasswordRequest(req.email()))))
+                .andExpect(status().isAccepted());
+
+        // Solo se envio 1 email (el de registro original), no el de reenvio
+        verify(emailSender, org.mockito.Mockito.times(1))
+                .send(eq(req.email()), anyString(), anyString());
     }
 
     // ============================================================

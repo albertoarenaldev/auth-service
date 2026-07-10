@@ -35,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -221,6 +222,51 @@ class AuthServiceTest {
                 .isInstanceOf(InvalidTokenException.class);
 
         assertThat(user.isEnabled()).isFalse();
+    }
+
+    // ============================================================
+    // resendVerification
+    // ============================================================
+
+    @Test
+    void resendVerification_withUnverifiedUser_generatesNewTokenAndSendsEmail() {
+        User user = unverifiedUser();
+        stubVerificationTokenDependencies();
+        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(user));
+        when(verificationTokenRepository.invalidateActiveTokensForUser(anyLong(), any(Instant.class))).thenReturn(1);
+
+        authService.resendVerification("alice@example.com");
+
+        // Invalida tokens previos, genera uno nuevo, envia email
+        verify(verificationTokenRepository).invalidateActiveTokensForUser(eq(1L), any(Instant.class));
+        verify(verificationTokenRepository).save(any(EmailVerificationToken.class));
+        verify(eventPublisher).publishEvent(any(EmailVerificationRequestedEvent.class));
+    }
+
+    @Test
+    void resendVerification_withAlreadyVerifiedUser_doesNothing() {
+        User user = sampleUser();
+        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(user));
+        when(passwordEncoder.encode(any(CharSequence.class))).thenReturn("dummy-hash");
+
+        authService.resendVerification("alice@example.com");
+
+        // No genera token ni envia email (anti-enumeration: timing equalization con bcrypt)
+        verify(passwordEncoder).encode(any(CharSequence.class));
+        verify(verificationTokenRepository, never()).save(any(EmailVerificationToken.class));
+        verify(eventPublisher, never()).publishEvent(any(EmailVerificationRequestedEvent.class));
+    }
+
+    @Test
+    void resendVerification_withNonExistentEmail_doesNothing() {
+        when(userRepository.findByEmail("ghost@example.com")).thenReturn(Optional.empty());
+        when(passwordEncoder.encode(any(CharSequence.class))).thenReturn("dummy-hash");
+
+        authService.resendVerification("ghost@example.com");
+
+        verify(passwordEncoder).encode(any(CharSequence.class));
+        verify(verificationTokenRepository, never()).save(any(EmailVerificationToken.class));
+        verify(eventPublisher, never()).publishEvent(any(EmailVerificationRequestedEvent.class));
     }
 
     // ============================================================

@@ -27,6 +27,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * Servicio de autenticacion: orquesta los flujos de registro, login,
@@ -386,6 +387,53 @@ public class AuthService {
         int revokedSessions = tokenService.revokeAllForUser(user.getId());
         log.info("Password changed for user id={} ({} refresh token(s) revoked)",
                 user.getId(), revokedSessions);
+    }
+
+    // ============================================================
+    // Reenvio de verificacion de email
+    // ============================================================
+
+    /**
+     * Reenvia el email de verificacion para un usuario no verificado.
+     *
+     * <p>Sigue el mismo patron anti-enumeration que
+     * {@link PasswordResetService#forgotPassword}: si el email no existe
+     * o ya esta verificado, responde silenciosamente (202) sin enviar
+     * correo. Si el usuario existe y NO esta verificado, invalida los
+     * tokens previos, genera uno nuevo y lo envia de forma asincrona.
+     *
+     * <p>Incluye dummy {@code passwordEncoder.encode()} en el path
+     * "usuario ya verificado" para igualar la latencia y evitar que
+     * un atacante distinga por timing.
+     *
+     * @param rawEmail email recibido del request (sin normalizar)
+     */
+    @Transactional
+    public void resendVerification(String rawEmail) {
+        String email = rawEmail == null ? "" : rawEmail.trim().toLowerCase();
+
+        User user = userRepository.findByEmail(email).orElse(null);
+        if (user == null) {
+            log.warn("Resend verification requested for non-existent email");
+            passwordEncoder.encode(UUID.randomUUID().toString());
+            return;
+        }
+
+        if (user.isEnabled()) {
+            log.info("Resend verification requested for already-verified user id={}", user.getId());
+            passwordEncoder.encode(UUID.randomUUID().toString());
+            return;
+        }
+
+        // Invalidar tokens previos (defensa en profundidad: solo el ultimo es valido)
+        Instant now = Instant.now();
+        int invalidated = verificationTokenRepository.invalidateActiveTokensForUser(user.getId(), now);
+        if (invalidated > 0) {
+            log.info("Invalidated {} previous verification token(s) for user id={}", invalidated, user.getId());
+        }
+
+        generateAndSendVerificationEmail(user);
+        log.info("Verification email resent for user id={}", user.getId());
     }
 
     // ============================================================

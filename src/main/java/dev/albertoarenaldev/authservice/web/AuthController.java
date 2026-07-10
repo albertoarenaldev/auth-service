@@ -105,6 +105,23 @@ public class AuthController {
     }
 
     /**
+     * Reenvia el email de verificacion para un usuario no verificado.
+     *
+     * <p>Siempre responde 202 Accepted (exista o no el email, este o no
+     * verificado) para mitigar user enumeration. Si el usuario existe y
+     * NO esta verificado, el servicio invalida los tokens previos, genera
+     * uno nuevo y lo envia de forma asincrona.
+     *
+     * @return 202 Accepted (cuerpo vacio)
+     * @throws 400 si el body no pasa Bean Validation
+     */
+    @PostMapping("/resend-verification")
+    public ResponseEntity<Void> resendVerification(@Valid @RequestBody ForgotPasswordRequest request) {
+        authService.resendVerification(request.email());
+        return ResponseEntity.accepted().build();
+    }
+
+    /**
      * Autentica por email+password y emite un nuevo par de tokens.
      *
      * @return 200 OK con {@link AuthResponse}
