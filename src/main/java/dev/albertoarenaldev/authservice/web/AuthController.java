@@ -1,5 +1,6 @@
 package dev.albertoarenaldev.authservice.web;
 
+import dev.albertoarenaldev.authservice.config.RateLimit;
 import dev.albertoarenaldev.authservice.dto.AuthResponse;
 import dev.albertoarenaldev.authservice.dto.ForgotPasswordRequest;
 import dev.albertoarenaldev.authservice.dto.LoginRequest;
@@ -20,6 +21,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Controlador REST de autenticacion. Expone los endpoints publicos del
@@ -129,6 +131,7 @@ public class AuthController {
      * @throws 401 si las credenciales son invalidas (mensaje generico para
      *         no permitir user enumeration)
      */
+    @RateLimit(capacity = 5, refillRate = 1, refillTime = 1, refillUnit = TimeUnit.MINUTES, name = "login")
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest request) {
         return ResponseEntity.ok(authService.login(request));
@@ -179,6 +182,7 @@ public class AuthController {
      * @throws 400 si el body no pasa la validacion Bean Validation
      *         (campo email no vacio y formato valido)
      */
+    @RateLimit(capacity = 3, refillRate = 1, refillTime = 5, refillUnit = TimeUnit.MINUTES, name = "forgot-password")
     @PostMapping("/forgot-password")
     public ResponseEntity<Void> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
         passwordResetService.forgotPassword(request.email());

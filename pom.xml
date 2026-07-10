@@ -104,14 +104,20 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- Password strength scoring (zxcvbn4j — port Java de zxcvbn de Dropbox).
-             Heuristica offline para bloquear contraseñas debiles/predecibles
-             sin necesidad de consultar APIs externas. Ver @StrongPassword
-             y StrongPasswordValidator para la logica. -->
+        <!-- Password strength scoring (zxcvbn4j) -->
         <dependency>
             <groupId>com.nulab-inc</groupId>
             <artifactId>zxcvbn</artifactId>
             <version>${zxcvbn.version}</version>
+        </dependency>
+
+        <!-- Rate limiting — Bucket4j (token-bucket algorithm, in-memory con
+             ConcurrentHashMap. Se puede migrar a Redis/JCache cambiando el
+             proxy sin tocar la API de Bucket4j.) -->
+        <dependency>
+            <groupId>com.bucket4j</groupId>
+            <artifactId>bucket4j-core</artifactId>
+            <version>8.10.1</version>
         </dependency>
 
         <!-- Tests -->
