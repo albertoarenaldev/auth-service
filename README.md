@@ -40,8 +40,9 @@
 | **Fase 4** — Endpoints | ✅ | register, login, refresh, logout + TokenService con rotacion, reuse detection y revocacion de familia (15 tests nuevos: 7 integracion + 8 unitarios) |
 | **Fase 5** — Password reset + hardening | ✅ | Flujo completo con email token + endpoint público + NIST zxcvbn + optimistic locking en tokens |
 | **Fase 6** — User profile | ✅ | `GET/PUT /api/v1/users/me`, `POST /me/password` con revocacion de sesiones OWASP + tests (16 tests nuevos) |
+| **Email verification** | ✅ | Flujo de verificacion de email al registro: token opaco SHA-256, envio asincrono, `GET /verify-email?token=` |
 
-**Tests:** 118/118 verde · **Cobertura:** 95% line · 89% branch · 100% class (JaCoCo 0.8.11 sobre `mvn verify`) · **Java:** 21 · **Spring Boot:** 3.5.5
+**Tests:** 122/122 verde · **Cobertura:** 95% line · 89% branch · 100% class (JaCoCo 0.8.11 sobre `mvn verify`) · **Java:** 21 · **Spring Boot:** 3.5.5
 
 ---
 
@@ -53,7 +54,7 @@
 | Framework | Spring Boot 3.5.5 |
 | Seguridad | Spring Security 6.x, JJWT 0.12.5 (HS256), BCrypt strength 12 |
 | Persistencia | JPA + Hibernate, H2 (dev/test), PostgreSQL (prod) |
-| Migraciones | Flyway 10+ (`V1__init_schema.sql`, `V2__add_version_column.sql`) + `ddl-auto: validate` |
+| Migraciones | Flyway 10+ (`V1__init_schema.sql`, `V2__add_version_column.sql`, `V3__add_email_verification_tokens.sql`) + `ddl-auto: validate` |
 | Política de contraseña | zxcvbn4j 1.9.0 — NIST SP 800-63B (threshold score ≥ 3, configurable por `@ConfigurationProperties`) |
 | Build | Maven 3.9+ |
 | Tests | JUnit 5, AssertJ, MockMvc, @DataJpaTest |
@@ -123,8 +124,9 @@ Claims del JWT:
 | Método | Path | Auth | Descripción |
 |---|---|---|---|
 | `GET` | `/api/v1/auth/health` | público | Health check del módulo auth. Devuelve `{"status":"UP"}` |
-| `POST` | `/api/v1/auth/register` | público | Crear cuenta: `{email, password, firstName, lastName}` → 201 + `{accessToken, refreshToken, user}` |
-| `POST` | `/api/v1/auth/login` | público | Login: `{email, password}` → 200 + `{accessToken, refreshToken, user}`. 401 generico para evitar user enumeration |
+| `POST` | `/api/v1/auth/register` | público | Crear cuenta: `{email, password, firstName, lastName}` → 201 + `{user}`. La cuenta queda `enabled=false`: debe verificarse el email antes del login |
+| `GET` | `/api/v1/auth/verify-email` | público | Verificar email: `?token=<raw-token>` → 200 + `{accessToken, refreshToken, user}`. Habilita la cuenta y emite el primer par de tokens |
+| `POST` | `/api/v1/auth/login` | público | Login: `{email, password}` → 200 + `{accessToken, refreshToken, user}`. 401 generico (anti-enumeration). Solo funciona si el email fue verificado |
 | `POST` | `/api/v1/auth/refresh` | público | Rotar refresh token: `{refreshToken}` → 200 + nuevos tokens. Deteccion de reuso + revocacion de familia |
 | `POST` | `/api/v1/auth/logout` | público | Revocar refresh token: `{refreshToken}` → 204 No Content. Idempotente |
 | `POST` | `/api/v1/auth/forgot-password` | público | Solicitar email de reset: `{email}` → 202 Accepted (devuelve 202 exista o no el email, anti-enumeración) |
@@ -139,8 +141,6 @@ Claims del JWT:
 ### Planificados (V1.1)
 
 | Método | Path | Auth | Descripción |
-|---|---|---|---|
-| `POST` | `/api/v1/auth/verify-email` | público | Verificar email tras registro |
 
 **Formato de respuesta 401 (RFC 6750):**
 ```json
@@ -403,7 +403,7 @@ mvn -B test -X
 
 **Cobertura actual:**
 
-- **Tests:** 118 / 118 passing · 0 flaky (18 clases: 94 `@Test` + 3 `@ParameterizedTest` expanden los 24 casos restantes)
+- **Tests:** 122 / 122 passing · 0 flaky (19 clases: 98 `@Test` + 3 `@ParameterizedTest` expanden los 24 casos restantes)
 - **Line coverage (JaCoCo):** 95% — 362 de 382 lineas cubiertas por los tests
 - **Branch coverage:** 89% — 136 de 152 ramas cubiertas
 - **Class coverage:** 100% — los 40 classes del main tienen al menos un test que invoca su codigo (medicion a nivel de "clase tocada", NO garantiza que todas las lineas o ramas esten ejercitadas; para eso mirar line/branch coverage arriba)
@@ -480,12 +480,14 @@ auth-service/
 │   │   │   │   ├── User.java
 │   │   │   │   ├── Role.java
 │   │   │   │   ├── RefreshToken.java
-│   │   │   │   └── PasswordResetToken.java
+│   │   │   │   ├── PasswordResetToken.java
+│   │   │   │   └── EmailVerificationToken.java
 │   │   │   ├── repository/             # Spring Data JPA
 │   │   │   │   ├── UserRepository.java
 │   │   │   │   ├── RoleRepository.java
 │   │   │   │   ├── RefreshTokenRepository.java
-│   │   │   │   └── PasswordResetTokenRepository.java
+│   │   │   │   ├── PasswordResetTokenRepository.java
+│   │   │   │   └── EmailVerificationTokenRepository.java
 │   │   │   ├── security/               # JWT infrastructure
 │   │   │   │   ├── JwtProperties.java
 │   │   │   │   ├── JwtTokenProvider.java
