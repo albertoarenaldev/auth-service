@@ -31,6 +31,10 @@ un ADR nuevo que la **supersede**, no se reescribe la historia.
 | [006](#adr-006-no-lombok--getterssetters-explícitos) | No Lombok — getters/setters explícitos | ✅ Aceptada |
 | [007](#adr-007-refresh-token-rotation-con-detección-de-reuso) | Refresh token rotation con detección de reuso | ✅ Aceptada |
 | [008](#adr-008-aislamiento-de-tests-con-h2--random-uuid) | Aislamiento de tests con H2 + random UUID | ✅ Aceptada |
+| [009](#adr-009-oauth2oidc-login-con-google-y-github) | OAuth2/OIDC login con Google y GitHub | ✅ Aceptada |
+| [010](#adr-010-audit-log-sincrónico-en-base-de-datos-11-eventos) | Audit log sincrónico en base de datos (11 eventos) | ✅ Aceptada |
+| [011](#adr-011-rate-limiting-en-memoria-con-bucket4j) | Rate limiting en memoria con Bucket4j | ✅ Aceptada |
+| [012](#adr-012-observabilidad-con-micrometer-y-prometheus) | Observabilidad con Micrometer y Prometheus | ✅ Aceptada |
 
 ---
 
@@ -388,6 +392,132 @@ Tests JPA que comparten la misma DB en memoria tienen problemas:
 - Con `@Fork` de Surefire, varios tests pueden correr en paralelo en la misma JVM
 - Un counter tendría colisiones; el UUID no
 - `${random.uuid}` lo resuelve Spring al cargar la property (cada contexto obtiene uno nuevo)
+
+---
+
+## ADR-009: OAuth2/OIDC login con Google y GitHub
+
+**Fecha:** 2025-07-08
+**Estado:** ✅ Aceptada
+
+### Contexto
+
+Para reducir la fricción en el registro y mejorar la experiencia de usuario (UX), es un estándar de la industria ofrecer "Social Login". Además, delegar la autenticación a proveedores robustos reduce nuestra superficie de ataque frente a la gestión de contraseñas.
+
+### Decisión
+
+Implementar inicio de sesión social utilizando `spring-boot-starter-oauth2-client`:
+- **Google** vía protocolo estándar OIDC (OpenID Connect).
+- **GitHub** vía OAuth2 clásico.
+- Flujo adaptado para enlazar cuentas sociales con correos electrónicos existentes o aprovisionar usuarios nuevos automáticamente.
+- `OAuth2AuthenticationSuccessHandler` extiende `SimpleUrlAuthenticationSuccessHandler` para generar JWT + refresh token tras login exitoso y redirigir al frontend con los tokens como query params.
+
+### Consecuencias
+
+**Positivas:**
+- Menos barreras de entrada para nuevos usuarios.
+- Delegación de la seguridad de la contraseña a gigantes tecnológicos (Google/GitHub).
+- Integración nativa y probada a través del ecosistema de Spring Security.
+- El handler es condicional (`@ConditionalOnProperty`): se desactiva automáticamente en tests.
+
+**Negativas / trade-offs:**
+- GitHub no implementa OIDC estrictamente, lo que requiere un mapeo de atributos manual.
+- Dependencia externa: si Google/GitHub caen, el login de esos usuarios también.
+- Los tokens viajan como query params en la URL de redirect (patrón estándar SPA, pero visible en browser history).
+
+**Alternativas consideradas:**
+- **Auth0 / Keycloak:** Externalizar completamente la autenticación añadiendo un Identity Provider (IdP) externo. Descartado por ser over-engineering para esta fase del portfolio y quitar protagonismo al código de Spring Security que queremos demostrar.
+
+---
+
+## ADR-010: Audit log sincrónico en base de datos (11 eventos)
+
+**Fecha:** 2025-07-08
+**Estado:** ✅ Aceptada
+
+### Contexto
+
+Un Auth Service requiere trazabilidad estricta. Las normativas de seguridad (y buenas prácticas) exigen saber quién hizo qué, cuándo y desde dónde (IP), especialmente para eventos sensibles como intentos fallidos de login (para detectar fuerza bruta) o rotación de contraseñas.
+
+### Decisión
+
+Crear una entidad de dominio `AuditEvent` (almacenada en BD) alimentada de forma **sincrónica** para 11 tipos de eventos críticos: `LOGIN_SUCCESS`, `LOGIN_FAILURE`, `REGISTER`, `EMAIL_VERIFIED`, `VERIFICATION_RESENT`, `PASSWORD_CHANGED`, `PASSWORD_RESET_REQUESTED`, `PASSWORD_RESET_COMPLETED`, `TOKEN_REFRESHED`, `TOKEN_REUSE_DETECTED`, `TOKENS_REVOKED`. Se captura la IP del cliente vía `RequestContextHolder`. El `AuditService` usa `Propagation.MANDATORY` para garantizar atomicidad con la transacción del caller.
+
+### Consecuencias
+
+**Positivas:**
+- Visibilidad total y centralizada de la seguridad (útil para auditorías y bloqueos).
+- Fácil de consultar vía SQL estándar sin necesitar una pila externa de logs (ELK).
+- FK a User con `ON DELETE SET NULL` permite borrar usuarios sin perder el rastro de auditoría.
+- Demuestra conocimientos de instrumentación y observabilidad de seguridad.
+
+**Negativas / trade-offs:**
+- Escribir logs sincrónicos añade ligera latencia (~5-10ms) a las peticiones críticas.
+- Crecimiento acelerado de la tabla `audit_events`. Se requerirá una política de retención o particionado en el futuro.
+
+**Alternativas consideradas:**
+- **Colas asíncronas (Kafka / RabbitMQ):** Excelente para el rendimiento, pero requiere más infraestructura. Descartado para V1.
+- **Spring Boot Actuator Audit:** El framework por defecto es menos flexible para añadir claims de dominio (como `userAgent` o IPs detrás de proxies).
+
+---
+
+## ADR-011: Rate limiting en memoria con Bucket4j
+
+**Fecha:** 2025-07-08
+**Estado:** ✅ Aceptada
+
+### Contexto
+
+Los endpoints públicos como el Login, Registro y Password Reset son vulnerables a ataques de Denegación de Servicio (DoS), enumeración de usuarios y ataques de fuerza bruta. Era imperativo establecer límites de peticiones (Rate Limiting).
+
+### Decisión
+
+Implementar `Bucket4j` con el algoritmo Token Bucket de forma **in-memory** mediante un interceptor de Spring MVC por dirección IP y endpoint (ej. max 5 intentos de login por minuto por IP, 3 solicitudes de forgot-password cada 5 minutos). Configurable por anotación `@RateLimit` en los métodos del controlador. Toggle global `app.rate-limit.enabled` (deshabilitado en perfil `test` para no interferir con tests existentes).
+
+### Consecuencias
+
+**Positivas:**
+- Protección inmediata contra fuerza bruta sin requerir infraestructura extra.
+- El algoritmo Token Bucket es suave y gestiona picos de tráfico (bursts) elegantemente.
+- Configuración altamente personalizable por endpoint (distintos límites para login vs forgot-password).
+- Respuesta 429 con header `Retry-After` sigue el estándar HTTP.
+
+**Negativas / trade-offs:**
+- El estado es in-memory local a la JVM. Si escalamos horizontalmente (varias instancias del auth-service), las cuotas no se comparten (una cuota de 5 req/min se convierte en 5 × N instancias).
+
+**Alternativas consideradas:**
+- **Redis-backed Bucket4j:** Comparte el estado en la red. Ideal, pero requiere levantar Redis. Se reserva para una V2 al evolucionar a arquitectura de microservicios con múltiples réplicas.
+- **Rate limiting en API Gateway (nginx/Kong):** Mejor rendimiento general pero saca la lógica del código de aplicación, reduciendo lo que se puede exponer en el portfolio Java.
+
+---
+
+## ADR-012: Observabilidad con Micrometer y Prometheus
+
+**Fecha:** 2025-07-08
+**Estado:** ✅ Aceptada
+
+### Contexto
+
+No podemos gestionar lo que no medimos. En un entorno de producción, necesitamos monitorizar la salud del servicio, el uso de JVM (CPU, memoria), contadores de peticiones HTTP, ratios de error, y métricas de negocio (ej. logins, registros, resets de contraseña).
+
+### Decisión
+
+Uso de `spring-boot-starter-actuator` junto con `micrometer-registry-prometheus` para exponer un endpoint (`/actuator/prometheus`) con métricas en formato estándar de Prometheus. 8 contadores de negocio (`Counter`) definidos como beans en `MetricsConfig`: loginSuccess, loginFailure, register, emailVerified, passwordResetRequested, passwordResetCompleted, tokenRefresh, tokenReuse. Inyectados directamente en `AuthService`, `PasswordResetService` y `TokenService`.
+
+### Consecuencias
+
+**Positivas:**
+- Estándar de facto en la industria (Cloud Native). Familiar para la mayoría de equipos DevOps/SRE (Prometheus + Grafana).
+- Spring Boot Actuator autoconfigura el 90% de las métricas vitales (Tomcat threads, HikariCP pool, JVM memory).
+- El modelo pull de Prometheus no satura las conexiones de salida de la aplicación.
+- Contadores de negocio visibles junto a métricas de infraestructura en un solo endpoint.
+
+**Negativas / trade-offs:**
+- Riesgo de exposición de información: el endpoint `/actuator/prometheus` debe ser protegido correctamente mediante Spring Security o estar en una red/puerto de gestión aislado de internet público.
+
+**Alternativas consideradas:**
+- **Micrometer + Datadog / New Relic:** Modelos push. Más invasivos o atados a un proveedor de pago (vendor lock-in).
+- **OpenTelemetry (OTel):** Más completo y moderno (métricas + trazas + logs), pero introduce sobrecarga en la configuración. Prometheus nativo es el sweet spot entre simplicidad y profesionalidad.
 
 ---
 

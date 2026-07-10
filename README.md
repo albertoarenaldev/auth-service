@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen)](#)
 [![Branches](https://img.shields.io/badge/branches-89%25-green)](#)
-[![Tests](https://img.shields.io/badge/tests-100%2F100-brightgreen)](#)
+[![Tests](https://img.shields.io/badge/tests-129%2F129-brightgreen)](#)
 
 > Auth Service — stateless JWT authentication built with Spring Boot 3 + Spring Security 6.
 > Designed as a portfolio project showcasing clean architecture, testable security, and 12-factor config.
@@ -43,6 +43,8 @@
 | **Email verification** | ✅ | Flujo de verificacion de email al registro: token opaco SHA-256, envio asincrono, `GET /verify-email?token=`, `POST /resend-verification` |
 | **Fase 7** — Rate limiting | ✅ | Bucket4j token-bucket en `/login` (5/min) y `/forgot-password` (3/5min), IP-based, toggle `app.rate-limit.enabled` |
 | **Fase 8** — Audit log | ✅ | Tabla `audit_events` append-only con 11 tipos de eventos: login, password, tokens, verificacion |
+| **Fase 9** — OAuth2 / OIDC | ✅ | Login con Google y GitHub via Spring Security OAuth2 Client + redirect con tokens |
+| **Métricas** — Micrometer + Prometheus | ✅ | 8 contadores de negocio expuestos en `/actuator/prometheus` (login, registro, reset, tokens) |
 
 **Tests:** 129/129 verde · **Cobertura:** 95% line · 89% branch · 100% class (JaCoCo 0.8.11 sobre `mvn verify`) · **Java:** 21 · **Spring Boot:** 3.5.5
 
@@ -54,13 +56,15 @@
 |---|---|
 | Lenguaje | Java 21 (Temurin) |
 | Framework | Spring Boot 3.5.5 |
-| Seguridad | Spring Security 6.x, JJWT 0.12.5 (HS256), BCrypt strength 12 |
+| Seguridad | Spring Security 6.x, JJWT 0.12.5 (HS256), BCrypt strength 12, OAuth2 Client (Google, GitHub) |
 | Persistencia | JPA + Hibernate, H2 (dev/test), PostgreSQL (prod) |
-| Migraciones | Flyway 10+ (`V1`, `V2`, `V3`, `V4`) + `ddl-auto: validate` |
+| Migraciones | Flyway 10+ (`V1`–`V4`) + `ddl-auto: validate` |
 | Política de contraseña | zxcvbn4j 1.9.0 — NIST SP 800-63B (threshold score ≥ 3, configurable por `@ConfigurationProperties`) |
 | Build | Maven 3.9+ |
 | Tests | JUnit 5, AssertJ, MockMvc, @DataJpaTest |
 | Mail | Spring Mail (JavaMailSender) + MailHog (dev) |
+| Métricas | Micrometer + Prometheus (`/actuator/prometheus`) |
+| Rate limiting | Bucket4j token-bucket (IP-based, toggle `app.rate-limit.enabled`) |
 | CI | GitHub Actions (Ubuntu + Temurin JDK 21) |
 | Contenedores | Docker (multi-stage) + Docker Compose (PostgreSQL 16 + MailHog) |
 | Config | 12-factor (env vars, perfiles Spring) |
@@ -136,14 +140,20 @@ Claims del JWT:
 | `POST` | `/api/v1/auth/reset-password` | público | Confirmar reset: `{token, newPassword}` → 204 No Content. Token hasheado SHA-256, un solo uso, expira en 15 min |
 | `GET` | `/actuator/health` | público | Health check agregado (DB, disk, mail) |
 | `GET` | `/actuator/info` | 🔒 autenticado | Metadata del build (protegido para evitar info leak) |
+| `GET` | `/actuator/prometheus` | 🔒 autenticado | Métricas en formato Prometheus (8 contadores de negocio) |
+| `GET` | `/oauth2/authorization/google` | público | Iniciar login OAuth2 con Google → redirect a Google |
+| `GET` | `/oauth2/authorization/github` | público | Iniciar login OAuth2 con GitHub → redirect a GitHub |
+| `GET` | `/login/oauth2/code/*` | público | Callback OAuth2 (gestionado por Spring Security) → redirect al frontend con tokens |
 
 | `GET` | `/api/v1/users/me` | 🔒 autenticado | Perfil del usuario actual. Requiere JWT valido en `Authorization: Bearer` |
 | `PUT` | `/api/v1/users/me` | 🔒 autenticado | Actualizar nombre y apellido: `{firstName, lastName}` → 200 + perfil actualizado |
 | `POST` | `/api/v1/users/me/password` | 🔒 autenticado | Cambiar contraseña: `{currentPassword, newPassword}` → 204. Revoca todas las sesiones activas (OWASP ASVS V3.5) |
 
-### Planificados (V1.1)
+### Planificados (V2)
 
 | Método | Path | Auth | Descripción |
+|---|---|---|---|
+| — | — | — | Roadmap V1 completado. Próxima iteración: soporte multi-tenant, WebAuthn/Passkeys |
 
 **Formato de respuesta 401 (RFC 6750):**
 ```json
@@ -344,15 +354,15 @@ curl -i -X POST http://localhost:8080/api/v1/auth/register \
 docker compose logs auth-service | grep -iE 'flyway|migrat' | head -10
 # → "Migrating schema "public" to version "1 - init schema""
 # → "Migrating schema "public" to version "2 - add version column""
-# → "Successfully applied 2 migrations to schema "public""
+# → "Successfully applied 4 migrations to schema "public""
 ```
 
 **Paso 3: listar las tablas creadas en PostgreSQL**
 
 ```bash
 docker compose exec postgres psql -U authuser -d authdb -c '\dt'
-# → 6 tablas: flyway_schema_history, password_reset_tokens, refresh_tokens,
-#             roles, user_roles, users
+# → 8 tablas: flyway_schema_history, password_reset_tokens, refresh_tokens,
+#             roles, user_roles, users, email_verification_tokens, audit_events
 ```
 
 **Paso 4: iniciar el flujo de password reset**
@@ -457,6 +467,19 @@ SPRING_MAIL_PORT=587
 SPRING_MAIL_USERNAME=...
 SPRING_MAIL_PASSWORD=...
 
+# OAuth2 / OIDC (Google y GitHub)
+# Google: https://console.cloud.google.com/apis/credentials
+SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_CLIENT_ID=...
+SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_CLIENT_SECRET=...
+# GitHub: https://github.com/settings/developers → OAuth Apps
+SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GITHUB_CLIENT_ID=...
+SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GITHUB_CLIENT_SECRET=...
+# URL del frontend SPA que recibe los tokens tras login OAuth2
+APP_OAUTH2_REDIRECT_URI=http://localhost:5173/oauth2/callback
+
+# Rate limiting
+APP_RATE_LIMIT_ENABLED=true
+
 # Política de contraseña (Nivel NIST SP 800-63B, default 3 = "safely unguessable")
 # Rango válido: 0 (muy débil) a 4 (muy fuerte). Cambiar sin redeploy.
 APP_SECURITY_PASSWORD_POLICY_MIN_ZXCVBN_SCORE=3
@@ -471,31 +494,48 @@ auth-service/
 ├── .github/
 │   └── workflows/
 │       └── ci.yml                       # GitHub Actions CI
+├── docs/
+│   └── releases/
+│       └── v0.2.0-password-reset.md    # Release notes Fase 5
 ├── src/
 │   ├── main/
 │   │   ├── java/dev/albertoarenaldev/authservice/
 │   │   │   ├── AuthServiceApplication.java
 │   │   │   ├── config/                 # Spring @Configuration
+│   │   │   │   ├── AsyncConfig.java    # @EnableAsync para emails
 │   │   │   │   ├── DataSeeder.java     # Seeder idempotente de roles
+│   │   │   │   ├── MetricsConfig.java  # 8 Counter beans Micrometer
+│   │   │   │   ├── OAuth2Properties.java
 │   │   │   │   ├── PasswordEncoderConfig.java
-│   │   │   │   └── SecurityConfig.java
+│   │   │   │   ├── PasswordPolicyConfig.java
+│   │   │   │   ├── PasswordPolicyProperties.java
+│   │   │   │   ├── PasswordResetProperties.java
+│   │   │   │   ├── RateLimit.java      # Anotacion @RateLimit
+│   │   │   │   ├── RateLimitConfig.java
+│   │   │   │   ├── RateLimitInterceptor.java
+│   │   │   │   ├── SecurityConfig.java
+│   │   │   │   └── TokenCleanupScheduler.java
 │   │   │   ├── modelo/                 # JPA entities
-│   │   │   │   ├── User.java
-│   │   │   │   ├── Role.java
-│   │   │   │   ├── RefreshToken.java
+│   │   │   │   ├── AuditEvent.java
+│   │   │   │   ├── AuditEventType.java
+│   │   │   │   ├── EmailVerificationToken.java
 │   │   │   │   ├── PasswordResetToken.java
-│   │   │   │   └── EmailVerificationToken.java
+│   │   │   │   ├── RefreshToken.java
+│   │   │   │   ├── Role.java
+│   │   │   │   └── User.java
 │   │   │   ├── repository/             # Spring Data JPA
-│   │   │   │   ├── UserRepository.java
-│   │   │   │   ├── RoleRepository.java
-│   │   │   │   ├── RefreshTokenRepository.java
+│   │   │   │   ├── AuditEventRepository.java
+│   │   │   │   ├── EmailVerificationTokenRepository.java
 │   │   │   │   ├── PasswordResetTokenRepository.java
-│   │   │   │   └── EmailVerificationTokenRepository.java
-│   │   │   ├── security/               # JWT infrastructure
+│   │   │   │   ├── RefreshTokenRepository.java
+│   │   │   │   ├── RoleRepository.java
+│   │   │   │   └── UserRepository.java
+│   │   │   ├── security/               # JWT + OAuth2
+│   │   │   │   ├── JwtAuthenticationEntryPoint.java
+│   │   │   │   ├── JwtAuthenticationFilter.java
 │   │   │   │   ├── JwtProperties.java
 │   │   │   │   ├── JwtTokenProvider.java
-│   │   │   │   ├── JwtAuthenticationFilter.java
-│   │   │   │   └── JwtAuthenticationEntryPoint.java
+│   │   │   │   └── OAuth2AuthenticationSuccessHandler.java
 │   │   │   ├── dto/                    # Request/Response records
 │   │   │   │   ├── AuthResponse.java
 │   │   │   │   ├── ChangePasswordRequest.java
@@ -511,12 +551,18 @@ auth-service/
 │   │   │   │   ├── EmailAlreadyExistsException.java
 │   │   │   │   ├── GlobalExceptionHandler.java
 │   │   │   │   ├── InvalidCredentialsException.java
-│   │   │   │   └── InvalidTokenException.java
+│   │   │   │   ├── InvalidTokenException.java
+│   │   │   │   └── RateLimitExceededException.java
 │   │   │   ├── service/                # Business logic
+│   │   │   │   ├── AuditService.java
 │   │   │   │   ├── AuthService.java
+│   │   │   │   ├── EmailVerificationEventListener.java
+│   │   │   │   ├── EmailVerificationRequestedEvent.java
+│   │   │   │   ├── PasswordResetEventListener.java
+│   │   │   │   ├── PasswordResetRequestedEvent.java
 │   │   │   │   ├── PasswordResetService.java
-│   │   │   │   ├── TokenService.java
 │   │   │   │   ├── SecureTokenHasher.java
+│   │   │   │   ├── TokenService.java
 │   │   │   │   └── email/
 │   │   │   │       ├── EmailSender.java
 │   │   │   │       ├── NoOpEmailSender.java
@@ -531,34 +577,47 @@ auth-service/
 │   │       ├── application.properties          # Config base
 │   │       ├── application-dev.properties      # Perfil dev
 │   │       ├── application-test.properties    # Perfil test
-│   │       └── application-prod.properties     # Perfil prod
+│   │       ├── application-prod.properties     # Perfil prod
+│   │       └── db/
+│   │           └── migration/
+│   │               ├── V1__init_schema.sql
+│   │               ├── V2__add_version_column.sql
+│   │               ├── V3__add_email_verification.sql
+│   │               └── V4__add_audit_events.sql
 │   └── test/
 │       └── java/dev/albertoarenaldev/authservice/
 │           ├── AuthServiceApplicationTests.java
 │           ├── config/
-│           │   └── DataSeederTest.java
+│           │   ├── DataSeederTest.java
+│           │   ├── PasswordPolicyConfigTest.java
+│           │   └── RateLimitInterceptorTest.java
 │           ├── repository/
-│           │   ├── UserRepositoryTest.java
+│           │   ├── EmailVerificationTokenRepositoryTest.java
+│           │   ├── PasswordResetTokenRepositoryTest.java
 │           │   ├── RefreshTokenRepositoryTest.java
-│           │   └── PasswordResetTokenRepositoryTest.java
+│           │   └── UserRepositoryTest.java
+│           ├── security/
+│           │   ├── JwtPropertiesTest.java
+│           │   ├── JwtTokenProviderTest.java
+│           │   └── SecurityConfigTest.java
 │           ├── service/
 │           │   ├── AuthServiceTest.java
-│           │   ├── PasswordResetServiceTest.java
 │           │   ├── PasswordResetServiceRaceConditionTest.java
+│           │   ├── PasswordResetServiceTest.java
 │           │   └── TokenServiceTest.java
 │           ├── validation/
 │           │   └── StrongPasswordValidatorTest.java
-│           ├── web/
-│           │   ├── AuthControllerIntegrationTest.java
-│           │   └── UserControllerIntegrationTest.java
-│           └── security/
-│               ├── JwtPropertiesTest.java
-│               ├── JwtTokenProviderTest.java
-│               └── SecurityConfigTest.java
+│           └── web/
+│               ├── AuthControllerIntegrationTest.java
+│               └── UserControllerIntegrationTest.java
+├── .dockerignore
 ├── .gitignore
+├── ARCHITECTURE.md
+├── docker-compose.yml
+├── Dockerfile
 ├── LICENSE                              # MIT
 ├── pom.xml
-└── README.md                            # ← estás aquí
+└── README.md                            # ← estas aqui
 ```
 
 **Convenciones del proyecto:**
@@ -584,7 +643,7 @@ auth-service/
 | **Fase 6** | ✅ | User profile endpoints + change password + revocacion de sesiones OWASP |
 | **Fase 7** | ✅ | Rate limiting con Bucket4j en /login (5/min) y /forgot-password (3/5min), IP-based |
 | **Fase 8** | ✅ | Audit log con 11 tipos de eventos (login, password, tokens, verificacion) |
-| **Fase 9** | ⏳ | OAuth2 / OIDC (login con Google, GitHub) |
+| **Fase 9** | ✅ | OAuth2 / OIDC (login con Google, GitHub) |
 
 ---
 
