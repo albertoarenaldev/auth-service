@@ -43,6 +43,7 @@ class TokenServiceTest {
     @Mock private RefreshTokenRepository refreshTokenRepository;
     @Mock private JwtTokenProvider jwtTokenProvider;
     @Mock private JwtProperties jwtProperties;
+    @Mock private AuditService auditService;
 
     @InjectMocks private TokenService tokenService;
 

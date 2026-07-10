@@ -1,6 +1,7 @@
 package dev.albertoarenaldev.authservice.service;
 
 import dev.albertoarenaldev.authservice.exception.InvalidTokenException;
+import dev.albertoarenaldev.authservice.modelo.AuditEventType;
 import dev.albertoarenaldev.authservice.modelo.RefreshToken;
 import dev.albertoarenaldev.authservice.modelo.User;
 import dev.albertoarenaldev.authservice.repository.RefreshTokenRepository;
@@ -59,13 +60,16 @@ public class TokenService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final JwtTokenProvider jwtTokenProvider;
     private final long refreshTtlMs;
+    private final AuditService auditService;
 
     public TokenService(RefreshTokenRepository refreshTokenRepository,
                         JwtTokenProvider jwtTokenProvider,
-                        JwtProperties jwtProperties) {
+                        JwtProperties jwtProperties,
+                        AuditService auditService) {
         this.refreshTokenRepository = refreshTokenRepository;
         this.jwtTokenProvider = jwtTokenProvider;
         this.refreshTtlMs = jwtProperties.getRefreshTokenExpirationMs();
+        this.auditService = auditService;
     }
 
     // ============================================================
@@ -141,6 +145,8 @@ public class TokenService {
                 // esta comprometida: revocamos TODOS los tokens del usuario.
                 log.warn("Refresh token reuse detected for user id={} - revoking entire family",
                         old.getUser().getId());
+                auditService.record(AuditEventType.TOKEN_REUSE_DETECTED, old.getUser(),
+                        "token_id=" + old.getId());
                 this.revokeAllForUser(old.getUser().getId());
                 // Mensaje generico para no leakear al cliente la razon del fallo.
                 // El log.warn de arriba mantiene la distincion server-side.
@@ -177,6 +183,8 @@ public class TokenService {
         String newAccess = jwtTokenProvider.generateAccessToken(old.getUser());
 
         log.debug("Rotated refresh token for user id={}", old.getUser().getId());
+        auditService.record(AuditEventType.TOKEN_REFRESHED, old.getUser(),
+                "old_token_id=" + old.getId() + " new_token_id=" + newEntity.getId());
         return new TokenPair(newAccess, newRaw, old.getUser());
     }
 
@@ -210,6 +218,10 @@ public class TokenService {
     public int revokeAllForUser(Long userId) {
         int revoked = refreshTokenRepository.revokeAllByUserId(userId, Instant.now());
         log.debug("Revoked {} refresh tokens for user id={}", revoked, userId);
+        if (revoked > 0) {
+            auditService.record(AuditEventType.TOKENS_REVOKED,
+                    "user_id=" + userId + " count=" + revoked);
+        }
         return revoked;
     }
 

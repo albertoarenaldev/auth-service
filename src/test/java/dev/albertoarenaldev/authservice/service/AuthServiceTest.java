@@ -57,6 +57,7 @@ class AuthServiceTest {
     @Mock private PasswordResetProperties resetProperties;
     @Mock private JwtProperties jwtProperties;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private AuditService auditService;
 
     @InjectMocks private AuthService authService;
 

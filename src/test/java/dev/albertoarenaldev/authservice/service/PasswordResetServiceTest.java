@@ -73,6 +73,7 @@ class PasswordResetServiceTest {
     @Mock private PasswordResetProperties passwordResetProperties;
     @Mock private JwtProperties jwtProperties;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private AuditService auditService;
 
     private PasswordResetService passwordResetService;
 
@@ -103,7 +104,7 @@ class PasswordResetServiceTest {
                 userRepository, tokenRepository,
                 passwordEncoder, tokenService,
                 passwordResetProperties, jwtProperties,
-                eventPublisher);
+                eventPublisher, auditService);
     }
 
     // ============================================================

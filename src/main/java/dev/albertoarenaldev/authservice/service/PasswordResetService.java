@@ -2,6 +2,7 @@ package dev.albertoarenaldev.authservice.service;
 
 import dev.albertoarenaldev.authservice.config.PasswordResetProperties;
 import dev.albertoarenaldev.authservice.exception.InvalidTokenException;
+import dev.albertoarenaldev.authservice.modelo.AuditEventType;
 import dev.albertoarenaldev.authservice.modelo.PasswordResetToken;
 import dev.albertoarenaldev.authservice.modelo.User;
 import dev.albertoarenaldev.authservice.repository.PasswordResetTokenRepository;
@@ -170,6 +171,7 @@ public class PasswordResetService {
     private final PasswordResetProperties resetProperties;
     private final long tokenExpirationMs;
     private final ApplicationEventPublisher eventPublisher;
+    private final AuditService auditService;
 
     public PasswordResetService(UserRepository userRepository,
                                 PasswordResetTokenRepository tokenRepository,
@@ -177,7 +179,8 @@ public class PasswordResetService {
                                 TokenService tokenService,
                                 PasswordResetProperties resetProperties,
                                 JwtProperties jwtProperties,
-                                ApplicationEventPublisher eventPublisher) {
+                                ApplicationEventPublisher eventPublisher,
+                                AuditService auditService) {
         this.userRepository = userRepository;
         this.tokenRepository = tokenRepository;
         this.passwordEncoder = passwordEncoder;
@@ -185,6 +188,7 @@ public class PasswordResetService {
         this.resetProperties = resetProperties;
         this.tokenExpirationMs = jwtProperties.getPasswordResetTokenExpirationMs();
         this.eventPublisher = eventPublisher;
+        this.auditService = auditService;
     }
 
     // ============================================================
@@ -261,6 +265,7 @@ public class PasswordResetService {
                 email, EMAIL_SUBJECT, body));
         log.info("Password reset link queued for user id={} email={}",
                 user.getId(), emailTag);
+        auditService.record(AuditEventType.PASSWORD_RESET_REQUESTED, user, "email=" + emailTag);
     }
 
     /**
@@ -331,6 +336,8 @@ public class PasswordResetService {
             int revokedSessions = tokenService.revokeAllForUser(user.getId());
             log.info("Password reset successful for user id={} ({} refresh token(s) revoked)",
                     user.getId(), revokedSessions);
+            auditService.record(AuditEventType.PASSWORD_RESET_COMPLETED, user,
+                    "sessions_revoked=" + revokedSessions);
         } catch (ObjectOptimisticLockingFailureException ex) {
             // Concurrencia detectada por @Version: otro request proceso el
             // mismo token entre el load y el save de este thread. La TX se

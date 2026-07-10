@@ -11,6 +11,7 @@ import dev.albertoarenaldev.authservice.dto.UserResponse;
 import dev.albertoarenaldev.authservice.exception.EmailAlreadyExistsException;
 import dev.albertoarenaldev.authservice.exception.InvalidCredentialsException;
 import dev.albertoarenaldev.authservice.exception.InvalidTokenException;
+import dev.albertoarenaldev.authservice.modelo.AuditEventType;
 import dev.albertoarenaldev.authservice.modelo.EmailVerificationToken;
 import dev.albertoarenaldev.authservice.modelo.Role;
 import dev.albertoarenaldev.authservice.modelo.User;
@@ -91,6 +92,7 @@ public class AuthService {
     private final PasswordResetProperties resetProperties;
     private final long verificationTokenExpirationMs;
     private final ApplicationEventPublisher eventPublisher;
+    private final AuditService auditService;
 
     public AuthService(UserRepository userRepository,
                        RoleRepository roleRepository,
@@ -99,7 +101,8 @@ public class AuthService {
                        EmailVerificationTokenRepository verificationTokenRepository,
                        PasswordResetProperties resetProperties,
                        JwtProperties jwtProperties,
-                       ApplicationEventPublisher eventPublisher) {
+                       ApplicationEventPublisher eventPublisher,
+                       AuditService auditService) {
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
         this.tokenService = tokenService;
@@ -108,6 +111,7 @@ public class AuthService {
         this.resetProperties = resetProperties;
         this.verificationTokenExpirationMs = jwtProperties.getEmailVerificationTokenExpirationMs();
         this.eventPublisher = eventPublisher;
+        this.auditService = auditService;
     }
 
     // ============================================================
@@ -150,6 +154,7 @@ public class AuthService {
 
         User saved = userRepository.save(user);
         log.info("Registered new user id={} email={} (pending email verification)", saved.getId(), saved.getEmail());
+        auditService.record(AuditEventType.REGISTER, saved, "email=" + saved.getEmail());
 
         // Generar token de verificacion y publicar evento para envio de email.
         // El listener lo consume en el pool emailExecutor tras el commit.
@@ -211,6 +216,7 @@ public class AuthService {
         user.setEnabled(true);
         userRepository.save(user);
         log.info("Email verified for user id={} email={}", user.getId(), user.getEmail());
+        auditService.record(AuditEventType.EMAIL_VERIFIED, user, "email=" + user.getEmail());
 
         return buildAuthResponse(user);
     }
@@ -242,12 +248,14 @@ public class AuthService {
         boolean passwordOk = passwordEncoder.matches(req.password(), user.getPasswordHash());
         if (!passwordOk || !user.isEnabled()) {
             log.warn("Failed login attempt for email={}", req.email());
+            auditService.record(AuditEventType.LOGIN_FAILURE, AuditService.getClientIp(), "email=" + req.email());
             throw new InvalidCredentialsException();
         }
 
         user.setLastLoginAt(Instant.now());
         userRepository.save(user);
         log.info("User id={} logged in successfully", user.getId());
+        auditService.record(AuditEventType.LOGIN_SUCCESS, user, "email=" + user.getEmail());
 
         return buildAuthResponse(user);
     }
@@ -387,6 +395,7 @@ public class AuthService {
         int revokedSessions = tokenService.revokeAllForUser(user.getId());
         log.info("Password changed for user id={} ({} refresh token(s) revoked)",
                 user.getId(), revokedSessions);
+        auditService.record(AuditEventType.PASSWORD_CHANGED, user, "sessions_revoked=" + revokedSessions);
     }
 
     // ============================================================
@@ -434,6 +443,7 @@ public class AuthService {
 
         generateAndSendVerificationEmail(user);
         log.info("Verification email resent for user id={}", user.getId());
+        auditService.record(AuditEventType.VERIFICATION_RESENT, user, "email=" + user.getEmail());
     }
 
     // ============================================================
