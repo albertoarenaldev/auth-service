@@ -51,8 +51,13 @@ public class SecurityConfig {
 
     private final JwtAuthenticationEntryPoint authenticationEntryPoint;
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
-    private final OAuth2AuthenticationSuccessHandler oauth2SuccessHandler;     // nullable (NO siempre existe)
-    private final ClientRegistrationRepository clientRegistrationRepository;   // nullable (NO siempre existe)
+    // ObjectProviders en vez de beans resueltos: la auto-configuración de OAuth2
+    // (OAuth2ClientAutoConfiguration) se ejecuta DESPUÉS de este constructor.
+    // Si llamamos getIfAvailable() aquí, siempre devuelve null porque el bean
+    // ClientRegistrationRepository aún no existe. Diferimos la resolución al
+    // método securityFilterChain(), cuando todos los beans ya están creados.
+    private final ObjectProvider<OAuth2AuthenticationSuccessHandler> oauth2SuccessHandlerProvider;
+    private final ObjectProvider<ClientRegistrationRepository> clientRegistrationRepositoryProvider;
 
     public SecurityConfig(JwtAuthenticationEntryPoint authenticationEntryPoint,
                           JwtAuthenticationFilter jwtAuthenticationFilter,
@@ -60,12 +65,8 @@ public class SecurityConfig {
                           ObjectProvider<ClientRegistrationRepository> clientRegistrationRepositoryProvider) {
         this.authenticationEntryPoint = authenticationEntryPoint;
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
-        // ObjectProvider.getIfAvailable() devuelve null si el bean no existe.
-        // En nuestro caso, el handler está @ConditionalOnBean(ClientRegistrationRepository.class)
-        // y OAuth2ClientAutoConfiguration solo crea el repo si hay credenciales.
-        // Si no hay nada → ambos son null → app sigue arrancando con JWT nativo.
-        this.oauth2SuccessHandler = oauth2SuccessHandlerProvider.getIfAvailable();
-        this.clientRegistrationRepository = clientRegistrationRepositoryProvider.getIfAvailable();
+        this.oauth2SuccessHandlerProvider = oauth2SuccessHandlerProvider;
+        this.clientRegistrationRepositoryProvider = clientRegistrationRepositoryProvider;
     }
 
     @Bean
@@ -81,9 +82,16 @@ public class SecurityConfig {
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
-        // OAuth2 solo si AMBOS existen: handler (creado por @ConditionalOnBean)
-        // y ClientRegistrationRepository (creado por OAuth2ClientAutoConfiguration
-        // solo si hay credenciales via env vars). Doble guard defensivo.
+        // OAuth2 solo si AMBOS existen: handler (@Component sin condiciones,
+        // siempre creado) y ClientRegistrationRepository (creado por
+        // OAuth2ClientAutoConfiguration porque application.properties tiene
+        // registros con centinela NONE).
+        // IMPORTANTE: getIfAvailable() debe llamarse AQUÍ, no en el constructor.
+        // OAuth2ClientAutoConfiguration se ejecuta después y los beans no existen
+        // durante la construcción de esta clase.
+        OAuth2AuthenticationSuccessHandler oauth2SuccessHandler = oauth2SuccessHandlerProvider.getIfAvailable();
+        ClientRegistrationRepository clientRegistrationRepository = clientRegistrationRepositoryProvider.getIfAvailable();
+
         if (oauth2SuccessHandler != null && clientRegistrationRepository != null) {
             http.oauth2Login(oauth2 -> oauth2.successHandler(oauth2SuccessHandler));
         }
