@@ -40,9 +40,10 @@
 | **Fase 4** — Endpoints | ✅ | register, login, refresh, logout + TokenService con rotacion, reuse detection y revocacion de familia (15 tests nuevos: 7 integracion + 8 unitarios) |
 | **Fase 5** — Password reset + hardening | ✅ | Flujo completo con email token + endpoint público + NIST zxcvbn + optimistic locking en tokens |
 | **Fase 6** — User profile | ✅ | `GET/PUT /api/v1/users/me`, `POST /me/password` con revocacion de sesiones OWASP + tests (16 tests nuevos) |
-| **Email verification** | ✅ | Flujo de verificacion de email al registro: token opaco SHA-256, envio asincrono, `GET /verify-email?token=` |
+| **Email verification** | ✅ | Flujo de verificacion de email al registro: token opaco SHA-256, envio asincrono, `GET /verify-email?token=`, `POST /resend-verification` |
+| **Fase 7** — Rate limiting | ✅ | Bucket4j token-bucket en `/login` (5/min) y `/forgot-password` (3/5min), IP-based, toggle `app.rate-limit.enabled` |
 
-**Tests:** 122/122 verde · **Cobertura:** 95% line · 89% branch · 100% class (JaCoCo 0.8.11 sobre `mvn verify`) · **Java:** 21 · **Spring Boot:** 3.5.5
+**Tests:** 129/129 verde · **Cobertura:** 95% line · 89% branch · 100% class (JaCoCo 0.8.11 sobre `mvn verify`) · **Java:** 21 · **Spring Boot:** 3.5.5
 
 ---
 
@@ -129,6 +130,7 @@ Claims del JWT:
 | `POST` | `/api/v1/auth/login` | público | Login: `{email, password}` → 200 + `{accessToken, refreshToken, user}`. 401 generico (anti-enumeration). Solo funciona si el email fue verificado |
 | `POST` | `/api/v1/auth/refresh` | público | Rotar refresh token: `{refreshToken}` → 200 + nuevos tokens. Deteccion de reuso + revocacion de familia |
 | `POST` | `/api/v1/auth/logout` | público | Revocar refresh token: `{refreshToken}` → 204 No Content. Idempotente |
+| `POST` | `/api/v1/auth/resend-verification` | público | Reenviar email de verificacion: `{email}` → 202 Accepted. Anti-enumeration: siempre 202 |
 | `POST` | `/api/v1/auth/forgot-password` | público | Solicitar email de reset: `{email}` → 202 Accepted (devuelve 202 exista o no el email, anti-enumeración) |
 | `POST` | `/api/v1/auth/reset-password` | público | Confirmar reset: `{token, newPassword}` → 204 No Content. Token hasheado SHA-256, un solo uso, expira en 15 min |
 | `GET` | `/actuator/health` | público | Health check agregado (DB, disk, mail) |
@@ -403,7 +405,7 @@ mvn -B test -X
 
 **Cobertura actual:**
 
-- **Tests:** 122 / 122 passing · 0 flaky (19 clases: 98 `@Test` + 3 `@ParameterizedTest` expanden los 24 casos restantes)
+- **Tests:** 129 / 129 passing · 0 flaky (20 clases: 102 `@Test` + 3 `@ParameterizedTest` expanden los 27 casos restantes)
 - **Line coverage (JaCoCo):** 95% — 362 de 382 lineas cubiertas por los tests
 - **Branch coverage:** 89% — 136 de 152 ramas cubiertas
 - **Class coverage:** 100% — los 40 classes del main tienen al menos un test que invoca su codigo (medicion a nivel de "clase tocada", NO garantiza que todas las lineas o ramas esten ejercitadas; para eso mirar line/branch coverage arriba)
@@ -579,7 +581,7 @@ auth-service/
 | **Fase 4** | ✅ | Endpoints de auth (register, login, refresh, logout) |
 | **Fase 5** | ✅ | Password reset flow + NIST SP 800-63B password policy + optimistic locking en tokens de un solo uso |
 | **Fase 6** | ✅ | User profile endpoints + change password + revocacion de sesiones OWASP |
-| **Fase 7** | ⏳ | Rate limiting (login attempts, password reset) |
+| **Fase 7** | ✅ | Rate limiting con Bucket4j en /login (5/min) y /forgot-password (3/5min), IP-based |
 | **Fase 8** | ⏳ | Audit log (login events, password changes) |
 | **Fase 9** | ⏳ | OAuth2 / OIDC (login con Google, GitHub) |
 
