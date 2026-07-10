@@ -465,8 +465,9 @@ public class AuthService {
         newUser.addRole(defaultRole);
 
         User saved = userRepository.save(newUser);
-        log.info("Created new user via OAuth2: id={} email={}", saved.getId(), email);            auditService.record(AuditEventType.REGISTER, saved, "email=" + saved.getEmail() + " method=oauth2");
-            loginSuccessCounter.increment();
+        log.info("Created new user via OAuth2: id={} email={}", saved.getId(), email);
+        auditService.record(AuditEventType.REGISTER, saved, "email=" + saved.getEmail() + " method=oauth2");
+        loginSuccessCounter.increment();
 
         return buildAuthResponse(saved);
     }
