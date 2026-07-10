@@ -467,7 +467,12 @@ SPRING_MAIL_PORT=587
 SPRING_MAIL_USERNAME=...
 SPRING_MAIL_PASSWORD=...
 
-# OAuth2 / OIDC (Google y GitHub)
+# OAuth2 / OIDC (Google y GitHub) — OPCIONAL, se activa por presencia
+# No hay ningun toggle tipo APP_OAUTH2_ENABLED=true. OAuth2 se activa
+# automaticamente cuando se proporcionan estas env vars. Si ninguna esta
+# presente, la autoconfig de Spring Boot hace back-off silencioso y la app
+# funciona solo con JWT nativo (sin endpoints /oauth2/authorization/).
+#
 # Google: https://console.cloud.google.com/apis/credentials
 SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_CLIENT_ID=...
 SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GOOGLE_CLIENT_SECRET=...

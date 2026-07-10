@@ -63,8 +63,17 @@ services:
   # con overrides de mail para apuntar a MailHog en vez de un SMTP real.
   # Los env vars usan el formato SPRING_DATASOURCE_URL etc., que Spring
   # Boot mapea automaticamente a las propiedades (relaxed binding).
+  #
+  # NOTA sobre OAuth2: las credenciales de GitHub/Google se pasan via .env
+  # usando los nombres estandar de Spring Boot (relaxed binding):
+  #   SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GITHUB_CLIENT_ID=...
+  #   SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GITHUB_CLIENT_SECRET=...
+  # Si NO existen esas variables, OAuth2 se desactiva automaticamente
+  # (el container arranca sin errores, solo JWT nativo).
   # -------------------------------------------------------------------
   auth-service:
+    env_file:
+      - .env   # Lee SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_* si existen
     build:
       context: .
       dockerfile: Dockerfile
@@ -99,6 +108,12 @@ services:
 
       # ---- CORS para clientes locales comunes (Angular 4200, Vite 5173) ----
       APP_CORS_ORIGINS: http://localhost:4200,http://localhost:5173
+
+      # ---- OAuth2 — URL de redireccion tras login exitoso ----
+      # Apunta a /health (publico) para que el navegador muestre JSON si no
+      # hay frontend. Solo aplica cuando hay credenciales reales en .env
+      # (presence-based: si .env tiene SPRING_SECURITY_OAUTH2_*, OAuth2 se monta solo).
+      APP_OAUTH2_REDIRECT_URI: "http://127.0.0.1:8080/api/v1/auth/health"
 
       # ---- Zona horaria UTC (consistencia de timestamps JWT/tokens/BD) ----
       TZ: UTC
