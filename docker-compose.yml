@@ -66,10 +66,11 @@ services:
   #
   # NOTA sobre OAuth2: las credenciales de GitHub/Google se pasan via .env
   # usando los nombres estandar de Spring Boot (relaxed binding):
-  #   SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GITHUB_CLIENT_ID=...
-  #   SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GITHUB_CLIENT_SECRET=...
-  # Si NO existen esas variables, OAuth2 se desactiva automaticamente
-  # (el container arranca sin errores, solo JWT nativo).
+  #   SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GITHUB_CLIENTID=...
+  #   SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_GITHUB_CLIENTSECRET=...
+  # Si NO existen esas variables, las rutas /oauth2/authorization/* existen
+  # pero redirigen con client_id=NONE (GitHub/Google muestran su propio error).
+  # Sin boot-loop, sin 401. Con credenciales reales, OAuth2 funciona normal.
   # -------------------------------------------------------------------
   auth-service:
     env_file:
