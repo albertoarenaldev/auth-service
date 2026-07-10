@@ -399,6 +399,61 @@ public class AuthService {
     }
 
     // ============================================================
+    // OAuth2 / OIDC (Fase 9)
+    // ============================================================
+
+    /**
+     * Busca o crea un usuario a partir de un login OAuth2 exitoso.
+     *
+     * <p>Si el email ya existe en BD, devuelve tokens para ese usuario
+     * (independientemente de si se registro con password o con OAuth2).
+     * Si no existe, crea un usuario nuevo con {@code enabled = true}
+     * (el email ya fue verificado por el provider OAuth2).
+     *
+     * <p>El usuario OAuth2 no tiene password local: se genera un hash
+     * aleatorio que nunca se usara (el login siempre es via OAuth2).
+     *
+     * @param email     email verificado por el provider OAuth2
+     * @param fullName  nombre completo del perfil OAuth2 (o el email si no hay)
+     * @return AuthResponse con access + refresh + datos del usuario
+     */
+    @Transactional
+    public AuthResponse findOrCreateOAuth2User(String email, String fullName) {
+        User user = userRepository.findByEmail(email).orElse(null);
+
+        if (user != null) {
+            log.info("OAuth2 login for existing user id={} email={}", user.getId(), email);
+            user.setLastLoginAt(Instant.now());
+            userRepository.save(user);
+            auditService.record(AuditEventType.LOGIN_SUCCESS, user, "method=oauth2");
+            return buildAuthResponse(user);
+        }
+
+        // Crear usuario nuevo: email ya verificado por el provider
+        Role defaultRole = roleRepository.findByName(DEFAULT_ROLE_NAME)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Default role " + DEFAULT_ROLE_NAME + " not found."));
+
+        String[] nameParts = fullName.split(" ", 2);
+        String firstName = nameParts[0];
+        String lastName = nameParts.length > 1 ? nameParts[1] : "";
+
+        User newUser = new User();
+        newUser.setEmail(email);
+        newUser.setPasswordHash(passwordEncoder.encode(UUID.randomUUID().toString()));
+        newUser.setFirstName(firstName);
+        newUser.setLastName(lastName);
+        newUser.setEnabled(true); // Email verificado por el provider
+        newUser.addRole(defaultRole);
+
+        User saved = userRepository.save(newUser);
+        log.info("Created new user via OAuth2: id={} email={}", saved.getId(), email);
+        auditService.record(AuditEventType.REGISTER, saved, "email=" + saved.getEmail() + " method=oauth2");
+
+        return buildAuthResponse(saved);
+    }
+
+    // ============================================================
     // Reenvio de verificacion de email
     // ============================================================
 

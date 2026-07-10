@@ -120,6 +120,12 @@
             <version>8.10.1</version>
         </dependency>
 
+        <!-- OAuth2 / OIDC — login con Google, GitHub, etc. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-client</artifactId>
+        </dependency>
+
         <!-- Tests -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

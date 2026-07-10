@@ -2,6 +2,7 @@ package dev.albertoarenaldev.authservice.config;
 
 import dev.albertoarenaldev.authservice.security.JwtAuthenticationEntryPoint;
 import dev.albertoarenaldev.authservice.security.JwtAuthenticationFilter;
+import dev.albertoarenaldev.authservice.security.OAuth2AuthenticationSuccessHandler;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -19,6 +20,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Configuración de Spring Security: API stateless con JWT.
@@ -43,16 +45,19 @@ import java.util.List;
  */
 @Configuration
 @EnableWebSecurity
-@EnableConfigurationProperties(PasswordResetProperties.class)
+@EnableConfigurationProperties({PasswordResetProperties.class, OAuth2Properties.class})
 public class SecurityConfig {
 
     private final JwtAuthenticationEntryPoint authenticationEntryPoint;
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final OAuth2AuthenticationSuccessHandler oauth2SuccessHandler;
 
     public SecurityConfig(JwtAuthenticationEntryPoint authenticationEntryPoint,
-                          JwtAuthenticationFilter jwtAuthenticationFilter) {
+                          JwtAuthenticationFilter jwtAuthenticationFilter,
+                          Optional<OAuth2AuthenticationSuccessHandler> oauth2SuccessHandler) {
         this.authenticationEntryPoint = authenticationEntryPoint;
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+        this.oauth2SuccessHandler = oauth2SuccessHandler.orElse(null);
     }
 
     @Bean
@@ -67,6 +72,11 @@ public class SecurityConfig {
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
+
+        // OAuth2 solo si hay al menos un provider configurado
+        if (oauth2SuccessHandler != null) {
+            http.oauth2Login(oauth2 -> oauth2.successHandler(oauth2SuccessHandler));
+        }
 
         return http.build();
     }
