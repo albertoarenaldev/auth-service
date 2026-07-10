@@ -1,9 +1,12 @@
 package dev.albertoarenaldev.authservice.service;
 
 import dev.albertoarenaldev.authservice.dto.AuthResponse;
+import dev.albertoarenaldev.authservice.dto.ChangePasswordRequest;
 import dev.albertoarenaldev.authservice.dto.LoginRequest;
 import dev.albertoarenaldev.authservice.dto.RefreshRequest;
 import dev.albertoarenaldev.authservice.dto.RegisterRequest;
+import dev.albertoarenaldev.authservice.dto.UpdateProfileRequest;
+import dev.albertoarenaldev.authservice.dto.UserResponse;
 import dev.albertoarenaldev.authservice.exception.EmailAlreadyExistsException;
 import dev.albertoarenaldev.authservice.exception.InvalidCredentialsException;
 import dev.albertoarenaldev.authservice.modelo.Role;
@@ -187,5 +190,94 @@ class AuthServiceTest {
         // refresh es un thin wrapper: no debe tocar la DB ni passwordEncoder
         verify(userRepository, never()).findByEmail(any());
         verify(passwordEncoder, never()).matches(any(), any());
+    }
+
+    // ============================================================
+    // Perfil del usuario autenticado (Fase 6)
+    // ============================================================
+
+    @Test
+    void getCurrentUser_withExistingEmail_returnsUserResponse() {
+        User user = sampleUser();
+        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(user));
+
+        UserResponse response = authService.getCurrentUser("alice@example.com");
+
+        assertThat(response.email()).isEqualTo("alice@example.com");
+        assertThat(response.firstName()).isEqualTo("Alice");
+        assertThat(response.lastName()).isEqualTo("Doe");
+        assertThat(response.roles()).containsExactly("ROLE_USER");
+        // No debe leakear el password hash
+        assertThat(response).hasNoNullFieldsOrProperties();
+    }
+
+    @Test
+    void getCurrentUser_withNonExistentEmail_throwsInvalidCredentialsException() {
+        when(userRepository.findByEmail("ghost@example.com")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> authService.getCurrentUser("ghost@example.com"))
+                .isInstanceOf(InvalidCredentialsException.class)
+                .hasMessage("Invalid credentials");
+    }
+
+    @Test
+    void updateProfile_withValidData_updatesNameAndReturnsUserResponse() {
+        User user = sampleUser();
+        UpdateProfileRequest req = new UpdateProfileRequest("Bob", "Smith");
+        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(user));
+        when(userRepository.save(any(User.class))).thenReturn(user);
+
+        UserResponse response = authService.updateProfile("alice@example.com", req);
+
+        assertThat(response.firstName()).isEqualTo("Bob");
+        assertThat(response.lastName()).isEqualTo("Smith");
+        assertThat(user.getFirstName()).isEqualTo("Bob");
+        assertThat(user.getLastName()).isEqualTo("Smith");
+        verify(userRepository).save(user);
+    }
+
+    @Test
+    void updateProfile_withNonExistentEmail_throwsInvalidCredentialsException() {
+        UpdateProfileRequest req = new UpdateProfileRequest("Bob", "Smith");
+        when(userRepository.findByEmail("ghost@example.com")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> authService.updateProfile("ghost@example.com", req))
+                .isInstanceOf(InvalidCredentialsException.class);
+
+        verify(userRepository, never()).save(any(User.class));
+    }
+
+    @Test
+    void changePassword_withCorrectCurrentPassword_updatesHashAndRevokesSessions() {
+        User user = sampleUser();
+        ChangePasswordRequest req = new ChangePasswordRequest("old-pass", "new-strong-pass");
+        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("old-pass", user.getPasswordHash())).thenReturn(true);
+        when(passwordEncoder.encode("new-strong-pass")).thenReturn("new-hash");
+        when(tokenService.revokeAllForUser(1L)).thenReturn(3);
+
+        authService.changePassword("alice@example.com", req);
+
+        // La contraseña se actualiza con el nuevo hash
+        assertThat(user.getPasswordHash()).isEqualTo("new-hash");
+        verify(userRepository).save(user);
+        // Se revocan todas las sesiones activas (OWASP ASVS V3.5)
+        verify(tokenService).revokeAllForUser(1L);
+    }
+
+    @Test
+    void changePassword_withWrongCurrentPassword_throwsInvalidCredentialsException() {
+        User user = sampleUser();
+        ChangePasswordRequest req = new ChangePasswordRequest("wrong-pass", "new-strong-pass");
+        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("wrong-pass", user.getPasswordHash())).thenReturn(false);
+
+        assertThatThrownBy(() -> authService.changePassword("alice@example.com", req))
+                .isInstanceOf(InvalidCredentialsException.class);
+
+        // No debe modificar la password ni revocar sesiones si la actual es incorrecta
+        assertThat(user.getPasswordHash()).isEqualTo("hashed-password");
+        verify(userRepository, never()).save(any(User.class));
+        verify(tokenService, never()).revokeAllForUser(any());
     }
 }

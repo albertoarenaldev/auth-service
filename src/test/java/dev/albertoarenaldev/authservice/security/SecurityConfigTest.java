@@ -2,6 +2,8 @@ package dev.albertoarenaldev.authservice.security;
 
 import dev.albertoarenaldev.authservice.modelo.Role;
 import dev.albertoarenaldev.authservice.modelo.User;
+import dev.albertoarenaldev.authservice.repository.RoleRepository;
+import dev.albertoarenaldev.authservice.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -10,7 +12,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
-import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
@@ -42,14 +43,37 @@ class SecurityConfigTest {
     @Autowired
     private JwtTokenProvider tokenProvider;
 
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private RoleRepository roleRepository;
+
     private String validToken;
 
     @BeforeEach
     void setUp() {
-        Role roleUser = new Role("ROLE_USER");
-        User testUser = new User();
-        testUser.setEmail("alice@example.com");
-        testUser.setRoles(Set.of(roleUser));
+        // Asegurar que el rol base exista (DataSeeder lo crea, pero por si acaso)
+        Role roleUser = roleRepository.findByName("ROLE_USER")
+                .orElseGet(() -> roleRepository.save(new Role("ROLE_USER")));
+
+        // Idempotente: si el usuario ya existe (otro @BeforeEach en esta misma
+        // clase lo creo), lo reusamos. La BD H2 persiste entre tests dentro de
+        // la misma clase (@SpringBootTest con DB_CLOSE_DELAY=-1).
+        User testUser = userRepository.findByEmail("alice@example.com")
+                .orElseGet(() -> {
+                    User u = new User();
+                    u.setEmail("alice@example.com");
+                    u.setPasswordHash("hashed-password-for-test");
+                    u.setFirstName("Alice");
+                    u.setLastName("Test");
+                    u.setEnabled(true);
+                    u.addRole(roleUser);
+                    return userRepository.save(u);
+                });
+
+        // Regenerar el token: el usuario ya existe en BD (Fase 6),
+        // UserController.getCurrentUser lo busca via userRepository.
         validToken = tokenProvider.generateAccessToken(testUser);
     }
 
@@ -85,16 +109,12 @@ class SecurityConfigTest {
 
     @Test
     void protectedEndpoint_withValidToken_doesNotReturn401() throws Exception {
-        // El endpoint /api/v1/users/me no existe todavía (sin controller),
-        // pero la auth debe pasar. Devuelve 404 (no encontrado) en vez de 401.
+        // El endpoint /api/v1/users/me existe desde Fase 6 (UserController).
+        // Con token valido + usuario en BD, debe devolver 200 OK.
         mockMvc.perform(get("/api/v1/users/me")
                         .header("Authorization", "Bearer " + validToken))
-                .andExpect(result -> {
-                    int status = result.getResponse().getStatus();
-                    assertThat(status)
-                            .as("Con token válido, el endpoint no debe devolver 401 (la auth pasó)")
-                            .isNotEqualTo(401);
-                });
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.email").value("alice@example.com"));
     }
 
     @Test

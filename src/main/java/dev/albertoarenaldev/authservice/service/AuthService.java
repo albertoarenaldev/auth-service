@@ -1,9 +1,11 @@
 package dev.albertoarenaldev.authservice.service;
 
 import dev.albertoarenaldev.authservice.dto.AuthResponse;
+import dev.albertoarenaldev.authservice.dto.ChangePasswordRequest;
 import dev.albertoarenaldev.authservice.dto.LoginRequest;
 import dev.albertoarenaldev.authservice.dto.RefreshRequest;
 import dev.albertoarenaldev.authservice.dto.RegisterRequest;
+import dev.albertoarenaldev.authservice.dto.UpdateProfileRequest;
 import dev.albertoarenaldev.authservice.dto.UserResponse;
 import dev.albertoarenaldev.authservice.exception.EmailAlreadyExistsException;
 import dev.albertoarenaldev.authservice.exception.InvalidCredentialsException;
@@ -187,6 +189,96 @@ public class AuthService {
     @Transactional
     public int logoutAll(Long userId) {
         return tokenService.revokeAllForUser(userId);
+    }
+
+    // ============================================================
+    // Perfil del usuario autenticado (Fase 6)
+    // ============================================================
+
+    /**
+     * Obtiene el perfil del usuario autenticado a partir de su email
+     * (extraido del JWT por {@code JwtAuthenticationFilter}).
+     *
+     * <p>Si el usuario no existe en BD (p. ej. fue eliminado tras
+     * emitirse el JWT), lanza {@link InvalidCredentialsException}
+     * mapeada a 401 por {@code GlobalExceptionHandler}.
+     *
+     * @param email email del usuario autenticado (principal del
+     *              SecurityContext)
+     * @return representacion publica del usuario (sin password hash)
+     */
+    public UserResponse getCurrentUser(String email) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new InvalidCredentialsException());
+        return UserResponse.from(user);
+    }
+
+    /**
+     * Actualiza nombre y apellido del usuario autenticado.
+     *
+     * <p>No actualiza el email (requiere flujo de verificacion
+     * separado). Los campos llegan validados por Bean Validation
+     * desde el controller.
+     *
+     * @param email email del usuario autenticado
+     * @param req   payload con firstName y lastName
+     * @return perfil actualizado
+     */
+    @Transactional
+    public UserResponse updateProfile(String email, UpdateProfileRequest req) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new InvalidCredentialsException());
+        user.setFirstName(req.firstName());
+        user.setLastName(req.lastName());
+        User saved = userRepository.save(user);
+        log.info("User id={} updated profile", saved.getId());
+        return UserResponse.from(saved);
+    }
+
+    /**
+     * Cambia la contraseña del usuario autenticado.
+     *
+     * <p>Flujo:
+     * <ol>
+     *   <li>Verifica que {@code currentPassword} coincida con el hash
+     *       almacenado. Si no, lanza {@link InvalidCredentialsException}
+     *       (mismo mensaje generico que login fallido para no filtrar
+     *       informacion).</li>
+     *   <li>Hashea la nueva contraseña con BCrypt y la persiste.</li>
+     *   <li>Revoca todos los refresh tokens activos del usuario
+     *       (OWASP ASVS V3.5 / V6.5.1: invalidar sesiones tras cambio
+     *       de credenciales).</li>
+     * </ol>
+     *
+     * <p>Las tres operaciones viven dentro del mismo
+     * {@code @Transactional}: si la revocacion falla, el cambio de
+     * password hace rollback y el estado previo se preserva.
+     *
+     * <p><b>Limitacion conocida:</b> el access token JWT actual sigue
+     * siendo valido hasta su expiracion natural (15 min). El refresh
+     * invalida las sesiones a largo plazo; el cierre completo del
+     * access requiere JWT blocklist (Fase 7).
+     *
+     * @param email email del usuario autenticado
+     * @param req   payload con currentPassword y newPassword
+     */
+    @Transactional
+    public void changePassword(String email, ChangePasswordRequest req) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new InvalidCredentialsException());
+
+        boolean passwordOk = passwordEncoder.matches(req.currentPassword(), user.getPasswordHash());
+        if (!passwordOk) {
+            log.warn("Change password failed for user id={}: current password mismatch", user.getId());
+            throw new InvalidCredentialsException();
+        }
+
+        user.setPasswordHash(passwordEncoder.encode(req.newPassword()));
+        userRepository.save(user);
+
+        int revokedSessions = tokenService.revokeAllForUser(user.getId());
+        log.info("Password changed for user id={} ({} refresh token(s) revoked)",
+                user.getId(), revokedSessions);
     }
 
     // ============================================================
