@@ -6,18 +6,27 @@ import dev.albertoarenaldev.authservice.dto.ChangePasswordRequest;
 import dev.albertoarenaldev.authservice.dto.LoginRequest;
 import dev.albertoarenaldev.authservice.dto.RegisterRequest;
 import dev.albertoarenaldev.authservice.dto.UpdateProfileRequest;
+import dev.albertoarenaldev.authservice.service.email.EmailSender;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -49,15 +58,22 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class UserControllerIntegrationTest {
 
     private static final String REGISTER_PATH = "/api/v1/auth/register";
+    private static final String VERIFY_EMAIL_PATH = "/api/v1/auth/verify-email";
     private static final String LOGIN_PATH = "/api/v1/auth/login";
     private static final String ME_PATH = "/api/v1/users/me";
     private static final String ME_PASSWORD_PATH = "/api/v1/users/me/password";
+
+    private static final Pattern TOKEN_PARAM =
+            Pattern.compile("\\?token=([A-Za-z0-9_-]+)");
 
     @Autowired
     private MockMvc mockMvc;
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @MockBean
+    private EmailSender emailSender;
 
     // ============================================================
     // Helpers
@@ -77,16 +93,31 @@ class UserControllerIntegrationTest {
     }
 
     /**
-     * Registra un usuario y devuelve el AuthResponse con el access token.
-     * Helper reutilizado por todos los tests para autenticarse.
+     * Registra, verifica el email y devuelve AuthResponse con tokens.
      */
     private AuthResponse registerAndGetAuth() throws Exception {
         RegisterRequest req = sampleRegisterRequest();
-        MvcResult result = mockMvc.perform(post(REGISTER_PATH)
+
+        // 1. Registrar: 201 + UserResponse (sin tokens)
+        mockMvc.perform(post(REGISTER_PATH)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(req)))
-                .andExpect(status().isCreated())
+                .andExpect(status().isCreated());
+
+        // 2. Extraer token de verificacion del email
+        ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
+        verify(emailSender).send(eq(req.email()), anyString(), bodyCaptor.capture());
+        Matcher m = TOKEN_PARAM.matcher(bodyCaptor.getValue());
+        assertThat(m.find()).isTrue();
+        String verifyToken = m.group(1);
+
+        // 3. Verificar email: 200 + AuthResponse con tokens
+        MvcResult result = mockMvc.perform(get(VERIFY_EMAIL_PATH)
+                        .param("token", verifyToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessToken").isNotEmpty())
                 .andReturn();
+
         return objectMapper.readValue(result.getResponse().getContentAsString(), AuthResponse.class);
     }
 

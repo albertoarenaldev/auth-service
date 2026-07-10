@@ -39,6 +39,10 @@ public class JwtProperties {
     @Positive
     private Long passwordResetTokenExpirationMs;
 
+    @NotNull
+    @Positive
+    private Long emailVerificationTokenExpirationMs;
+
     public String getSecret() {
         return secret;
     }
@@ -77,5 +81,13 @@ public class JwtProperties {
 
     public void setPasswordResetTokenExpirationMs(Long passwordResetTokenExpirationMs) {
         this.passwordResetTokenExpirationMs = passwordResetTokenExpirationMs;
+    }
+
+    public Long getEmailVerificationTokenExpirationMs() {
+        return emailVerificationTokenExpirationMs;
+    }
+
+    public void setEmailVerificationTokenExpirationMs(Long emailVerificationTokenExpirationMs) {
+        this.emailVerificationTokenExpirationMs = emailVerificationTokenExpirationMs;
     }
 }

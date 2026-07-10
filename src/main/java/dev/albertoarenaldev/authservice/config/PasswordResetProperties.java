@@ -40,6 +40,13 @@ public class PasswordResetProperties {
 
     private String appName = "Auth Service";
 
+    /**
+     * URL base para verificacion de email (por defecto deriva de baseUrl).
+     * Si no se configura explicitamente, se construye reemplazando el
+     * segmento final "reset-password" por "verify-email".
+     */
+    private String verificationBaseUrl;
+
     public String getBaseUrl() {
         return baseUrl;
     }
@@ -54,5 +61,16 @@ public class PasswordResetProperties {
 
     public void setAppName(String appName) {
         this.appName = appName;
+    }
+
+    public String getVerificationBaseUrl() {
+        if (verificationBaseUrl != null && !verificationBaseUrl.isBlank()) {
+            return verificationBaseUrl;
+        }
+        return baseUrl.replaceFirst("/reset-password$", "/verify-email");
+    }
+
+    public void setVerificationBaseUrl(String verificationBaseUrl) {
+        this.verificationBaseUrl = verificationBaseUrl;
     }
 }

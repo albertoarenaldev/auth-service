@@ -6,6 +6,7 @@ import dev.albertoarenaldev.authservice.dto.LoginRequest;
 import dev.albertoarenaldev.authservice.dto.RefreshRequest;
 import dev.albertoarenaldev.authservice.dto.RegisterRequest;
 import dev.albertoarenaldev.authservice.dto.ResetPasswordRequest;
+import dev.albertoarenaldev.authservice.dto.UserResponse;
 import dev.albertoarenaldev.authservice.service.AuthService;
 import dev.albertoarenaldev.authservice.service.PasswordResetService;
 import jakarta.validation.Valid;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
@@ -26,7 +28,8 @@ import java.util.Map;
  * <p>Endpoints:
  * <ul>
  *   <li>{@code GET /health} - health check publico (smoke tests, CI).</li>
- *   <li>{@code POST /register} - crea un usuario nuevo y emite tokens.</li>
+ *   <li>{@code POST /register} - crea un usuario nuevo (requiere verificacion de email).</li>
+ *   <li>{@code GET /verify-email} - canjea el token de verificacion y emite tokens.</li>
  *   <li>{@code POST /login} - autentica por email+password y emite tokens.</li>
  *   <li>{@code POST /refresh} - rota el refresh token y emite tokens nuevos.</li>
  *   <li>{@code POST /logout} - revoca un refresh token (logout de un dispositivo).</li>
@@ -71,16 +74,34 @@ public class AuthController {
     }
 
     /**
-     * Registra un usuario nuevo y emite el primer par de tokens.
+     * Registra un usuario nuevo. La cuenta se crea con {@code enabled = false}:
+     * el usuario recibe un email de verificacion y debe canjearlo via
+     * {@code GET /verify-email?token=...} antes de poder autenticarse.
      *
-     * @return 201 Created con {@link AuthResponse} (access + refresh + user)
+     * @return 201 Created con {@link UserResponse} (datos del usuario, sin tokens)
      * @throws 400 si el body no pasa la validacion Bean Validation
      * @throws 409 si el email ya esta registrado
      */
     @PostMapping("/register")
-    public ResponseEntity<AuthResponse> register(@Valid @RequestBody RegisterRequest request) {
-        AuthResponse response = authService.register(request);
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    public ResponseEntity<UserResponse> register(@Valid @RequestBody RegisterRequest request) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(authService.register(request));
+    }
+
+    /**
+     * Verifica el email del usuario canjeando el token enviado por correo.
+     * Si el token es valido, habilita la cuenta y emite el primer par de
+     * tokens (access + refresh).
+     *
+     * <p>El token se recibe como query param en la URL:
+     * {@code /api/v1/auth/verify-email?token=<raw-token>}.
+     *
+     * @param token token en claro del enlace del correo
+     * @return 200 OK con {@link AuthResponse} (access + refresh + user)
+     * @throws 401 si el token no existe, expiro, o ya se uso
+     */
+    @GetMapping("/verify-email")
+    public ResponseEntity<AuthResponse> verifyEmail(@RequestParam("token") String token) {
+        return ResponseEntity.ok(authService.verifyEmail(token));
     }
 
     /**

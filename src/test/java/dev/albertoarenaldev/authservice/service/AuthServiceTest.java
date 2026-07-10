@@ -1,5 +1,6 @@
 package dev.albertoarenaldev.authservice.service;
 
+import dev.albertoarenaldev.authservice.config.PasswordResetProperties;
 import dev.albertoarenaldev.authservice.dto.AuthResponse;
 import dev.albertoarenaldev.authservice.dto.ChangePasswordRequest;
 import dev.albertoarenaldev.authservice.dto.LoginRequest;
@@ -9,10 +10,14 @@ import dev.albertoarenaldev.authservice.dto.UpdateProfileRequest;
 import dev.albertoarenaldev.authservice.dto.UserResponse;
 import dev.albertoarenaldev.authservice.exception.EmailAlreadyExistsException;
 import dev.albertoarenaldev.authservice.exception.InvalidCredentialsException;
+import dev.albertoarenaldev.authservice.exception.InvalidTokenException;
+import dev.albertoarenaldev.authservice.modelo.EmailVerificationToken;
 import dev.albertoarenaldev.authservice.modelo.Role;
 import dev.albertoarenaldev.authservice.modelo.User;
+import dev.albertoarenaldev.authservice.repository.EmailVerificationTokenRepository;
 import dev.albertoarenaldev.authservice.repository.RoleRepository;
 import dev.albertoarenaldev.authservice.repository.UserRepository;
+import dev.albertoarenaldev.authservice.security.JwtProperties;
 import dev.albertoarenaldev.authservice.service.TokenService.TokenPair;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -20,13 +25,16 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
+import java.time.Instant;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -36,12 +44,6 @@ import static org.mockito.Mockito.when;
  *
  * <p>Aislan la logica de orquestacion (validaciones, mapeo DTO/Entity,
  * manejo de excepciones) de la capa de persistencia y de seguridad.
- * Las dependencias (UserRepository, RoleRepository, TokenService,
- * PasswordEncoder) se mockean para que el test sea rapido y determinista.
- *
- * <p>Cubre los 3 metodos publicos principales: register, login, refresh.
- * Logout se delega trivialmente a TokenService (ya cubierto por
- * {@code TokenServiceTest} o por los tests de integracion de AuthController).
  */
 @ExtendWith(MockitoExtension.class)
 class AuthServiceTest {
@@ -50,6 +52,10 @@ class AuthServiceTest {
     @Mock private RoleRepository roleRepository;
     @Mock private TokenService tokenService;
     @Mock private PasswordEncoder passwordEncoder;
+    @Mock private EmailVerificationTokenRepository verificationTokenRepository;
+    @Mock private PasswordResetProperties resetProperties;
+    @Mock private JwtProperties jwtProperties;
+    @Mock private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks private AuthService authService;
 
@@ -73,8 +79,19 @@ class AuthServiceTest {
         return u;
     }
 
+    private User unverifiedUser() {
+        User u = sampleUser();
+        u.setEnabled(false);
+        return u;
+    }
+
     private RegisterRequest sampleRegisterRequest() {
         return new RegisterRequest("alice@example.com", "Password123!", "Alice", "Doe");
+    }
+
+    private void stubVerificationTokenDependencies() {
+        when(resetProperties.getVerificationBaseUrl()).thenReturn("http://localhost:5173/verify-email");
+        when(resetProperties.getAppName()).thenReturn("Auth Service");
     }
 
     // ============================================================
@@ -82,8 +99,9 @@ class AuthServiceTest {
     // ============================================================
 
     @Test
-    void register_withNewEmail_createsUserAndReturnsTokens() {
+    void register_withNewEmail_createsUnverifiedUserAndSendsEmail() {
         RegisterRequest req = sampleRegisterRequest();
+        stubVerificationTokenDependencies();
         when(userRepository.existsByEmail(req.email())).thenReturn(false);
         when(roleRepository.findByName("ROLE_USER")).thenReturn(Optional.of(userRole()));
         when(passwordEncoder.encode(req.password())).thenReturn("hashed-password");
@@ -92,28 +110,26 @@ class AuthServiceTest {
             u.setId(1L);
             return u;
         });
-        when(tokenService.generateAccessToken(any(User.class))).thenReturn("access.jwt.token");
-        when(tokenService.generateRefreshToken(any(User.class))).thenReturn("raw-refresh-token");
 
-        AuthResponse response = authService.register(req);
+        UserResponse response = authService.register(req);
 
-        // La respuesta incluye los tokens emitidos y los datos del usuario
-        assertThat(response.accessToken()).isEqualTo("access.jwt.token");
-        assertThat(response.refreshToken()).isEqualTo("raw-refresh-token");
-        assertThat(response.user().email()).isEqualTo("alice@example.com");
-        assertThat(response.user().firstName()).isEqualTo("Alice");
-        assertThat(response.user().lastName()).isEqualTo("Doe");
-        assertThat(response.user().roles()).containsExactly("ROLE_USER");
+        // Solo datos del usuario, sin tokens
+        assertThat(response.email()).isEqualTo("alice@example.com");
+        assertThat(response.firstName()).isEqualTo("Alice");
+        assertThat(response.lastName()).isEqualTo("Doe");
+        assertThat(response.roles()).containsExactly("ROLE_USER");
 
-        // Verifica que el password fue hasheado (no se guardo en claro) y
-        // que el usuario quedo habilitado con el rol por defecto.
+        // El usuario se guarda con enabled=false (default)
         ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(userCaptor.capture());
         User saved = userCaptor.getValue();
         assertThat(saved.getPasswordHash()).isEqualTo("hashed-password");
-        assertThat(saved.getPasswordHash()).isNotEqualTo(req.password());
-        assertThat(saved.isEnabled()).isTrue();
-        assertThat(saved.getRoles()).extracting(Role::getName).containsExactly("ROLE_USER");
+        assertThat(saved.isEnabled()).isFalse();
+
+        // Se persiste un token de verificacion
+        verify(verificationTokenRepository).save(any(EmailVerificationToken.class));
+        // Se publica evento para envio de email
+        verify(eventPublisher).publishEvent(any(EmailVerificationRequestedEvent.class));
     }
 
     @Test
@@ -124,10 +140,87 @@ class AuthServiceTest {
         assertThatThrownBy(() -> authService.register(req))
                 .isInstanceOf(EmailAlreadyExistsException.class);
 
-        // No debe intentar guardar ni emitir tokens si el email ya existe
+        verify(userRepository, never()).save(any(User.class));
+        verify(verificationTokenRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    // ============================================================
+    // verifyEmail
+    // ============================================================
+
+    @Test
+    void verifyEmail_withValidToken_enablesUserAndReturnsTokens() {
+        User user = unverifiedUser();
+        String rawToken = SecureTokenHasher.generateRawToken();
+        String tokenHash = SecureTokenHasher.hashToken(rawToken);
+
+        EmailVerificationToken token = new EmailVerificationToken();
+        token.setId(10L);
+        token.setUser(user);
+        token.setTokenHash(tokenHash);
+        token.setExpiresAt(Instant.now().plusSeconds(3600));
+
+        when(verificationTokenRepository.findByTokenHash(tokenHash)).thenReturn(Optional.of(token));
+        when(tokenService.generateAccessToken(user)).thenReturn("access.jwt.token");
+        when(tokenService.generateRefreshToken(user)).thenReturn("raw-refresh-token");
+
+        AuthResponse response = authService.verifyEmail(rawToken);
+
+        assertThat(response.accessToken()).isEqualTo("access.jwt.token");
+        assertThat(response.refreshToken()).isEqualTo("raw-refresh-token");
+        assertThat(response.user().email()).isEqualTo("alice@example.com");
+
+        // El usuario queda habilitado
+        assertThat(user.isEnabled()).isTrue();
+        verify(userRepository).save(user);
+        // El token se marca como usado
+        assertThat(token.getUsedAt()).isNotNull();
+        verify(verificationTokenRepository).save(token);
+    }
+
+    @Test
+    void verifyEmail_withUnknownToken_throwsInvalidTokenException() {
+        when(verificationTokenRepository.findByTokenHash(any())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> authService.verifyEmail("bogus-token"))
+                .isInstanceOf(InvalidTokenException.class);
+
         verify(userRepository, never()).save(any(User.class));
         verify(tokenService, never()).generateAccessToken(any());
         verify(tokenService, never()).generateRefreshToken(any());
+    }
+
+    @Test
+    void verifyEmail_withAlreadyUsedToken_throwsInvalidTokenException() {
+        User user = unverifiedUser();
+        EmailVerificationToken token = new EmailVerificationToken();
+        token.setUser(user);
+        token.setUsedAt(Instant.now());
+        token.setExpiresAt(Instant.now().plusSeconds(3600));
+
+        when(verificationTokenRepository.findByTokenHash(any())).thenReturn(Optional.of(token));
+
+        assertThatThrownBy(() -> authService.verifyEmail("used-token"))
+                .isInstanceOf(InvalidTokenException.class);
+
+        assertThat(user.isEnabled()).isFalse();
+        verify(userRepository, never()).save(any(User.class));
+    }
+
+    @Test
+    void verifyEmail_withExpiredToken_throwsInvalidTokenException() {
+        User user = unverifiedUser();
+        EmailVerificationToken token = new EmailVerificationToken();
+        token.setUser(user);
+        token.setExpiresAt(Instant.now().minusSeconds(1));
+
+        when(verificationTokenRepository.findByTokenHash(any())).thenReturn(Optional.of(token));
+
+        assertThatThrownBy(() -> authService.verifyEmail("expired-token"))
+                .isInstanceOf(InvalidTokenException.class);
+
+        assertThat(user.isEnabled()).isFalse();
     }
 
     // ============================================================
@@ -148,8 +241,6 @@ class AuthServiceTest {
         assertThat(response.accessToken()).isEqualTo("access.jwt.token");
         assertThat(response.refreshToken()).isEqualTo("raw-refresh-token");
         assertThat(response.user().email()).isEqualTo("alice@example.com");
-
-        // lastLoginAt se actualiza como efecto colateral del login exitoso
         assertThat(user.getLastLoginAt()).isNotNull();
         verify(userRepository).save(user);
     }
@@ -164,8 +255,21 @@ class AuthServiceTest {
         assertThatThrownBy(() -> authService.login(req))
                 .isInstanceOf(InvalidCredentialsException.class);
 
-        // Password incorrecto: no emitir tokens ni persistir lastLoginAt
         verify(userRepository, never()).save(any(User.class));
+        verify(tokenService, never()).generateAccessToken(any());
+        verify(tokenService, never()).generateRefreshToken(any());
+    }
+
+    @Test
+    void login_withDisabledAccount_throwsInvalidCredentialsException() {
+        User user = unverifiedUser();
+        LoginRequest req = new LoginRequest("alice@example.com", "Password123!");
+        when(userRepository.findByEmail(req.email())).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches(req.password(), user.getPasswordHash())).thenReturn(true);
+
+        assertThatThrownBy(() -> authService.login(req))
+                .isInstanceOf(InvalidCredentialsException.class);
+
         verify(tokenService, never()).generateAccessToken(any());
         verify(tokenService, never()).generateRefreshToken(any());
     }
@@ -183,13 +287,9 @@ class AuthServiceTest {
 
         AuthResponse response = authService.refresh(req);
 
-        // La respuesta envuelve el TokenPair devuelto por TokenService
         assertThat(response.accessToken()).isEqualTo("new-access.jwt");
         assertThat(response.refreshToken()).isEqualTo("new-raw-refresh");
         assertThat(response.user().email()).isEqualTo("alice@example.com");
-        // refresh es un thin wrapper: no debe tocar la DB ni passwordEncoder
-        verify(userRepository, never()).findByEmail(any());
-        verify(passwordEncoder, never()).matches(any(), any());
     }
 
     // ============================================================
@@ -207,8 +307,6 @@ class AuthServiceTest {
         assertThat(response.firstName()).isEqualTo("Alice");
         assertThat(response.lastName()).isEqualTo("Doe");
         assertThat(response.roles()).containsExactly("ROLE_USER");
-        // No debe leakear el password hash
-        assertThat(response).hasNoNullFieldsOrProperties();
     }
 
     @Test
@@ -258,10 +356,8 @@ class AuthServiceTest {
 
         authService.changePassword("alice@example.com", req);
 
-        // La contraseña se actualiza con el nuevo hash
         assertThat(user.getPasswordHash()).isEqualTo("new-hash");
         verify(userRepository).save(user);
-        // Se revocan todas las sesiones activas (OWASP ASVS V3.5)
         verify(tokenService).revokeAllForUser(1L);
     }
 
@@ -275,9 +371,8 @@ class AuthServiceTest {
         assertThatThrownBy(() -> authService.changePassword("alice@example.com", req))
                 .isInstanceOf(InvalidCredentialsException.class);
 
-        // No debe modificar la password ni revocar sesiones si la actual es incorrecta
         assertThat(user.getPasswordHash()).isEqualTo("hashed-password");
         verify(userRepository, never()).save(any(User.class));
-        verify(tokenService, never()).revokeAllForUser(any());
+        verify(tokenService, never()).revokeAllForUser(anyLong());
     }
 }

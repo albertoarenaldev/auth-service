@@ -57,8 +57,13 @@ public class User {
     @Column(name = "last_name", nullable = false, length = 100)
     private String lastName;
 
+    /**
+     * Por defecto {@code false}: el usuario debe verificar su email
+     * antes de poder autenticarse. {@link AuthService#verifyEmail}
+     * lo pone a {@code true} al canjear el token de verificacion.
+     */
     @Column(nullable = false)
-    private boolean enabled = true;
+    private boolean enabled = false;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

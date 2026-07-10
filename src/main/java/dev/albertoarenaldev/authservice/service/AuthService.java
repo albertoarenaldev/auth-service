@@ -1,5 +1,6 @@
 package dev.albertoarenaldev.authservice.service;
 
+import dev.albertoarenaldev.authservice.config.PasswordResetProperties;
 import dev.albertoarenaldev.authservice.dto.AuthResponse;
 import dev.albertoarenaldev.authservice.dto.ChangePasswordRequest;
 import dev.albertoarenaldev.authservice.dto.LoginRequest;
@@ -9,13 +10,18 @@ import dev.albertoarenaldev.authservice.dto.UpdateProfileRequest;
 import dev.albertoarenaldev.authservice.dto.UserResponse;
 import dev.albertoarenaldev.authservice.exception.EmailAlreadyExistsException;
 import dev.albertoarenaldev.authservice.exception.InvalidCredentialsException;
+import dev.albertoarenaldev.authservice.exception.InvalidTokenException;
+import dev.albertoarenaldev.authservice.modelo.EmailVerificationToken;
 import dev.albertoarenaldev.authservice.modelo.Role;
 import dev.albertoarenaldev.authservice.modelo.User;
+import dev.albertoarenaldev.authservice.repository.EmailVerificationTokenRepository;
 import dev.albertoarenaldev.authservice.repository.RoleRepository;
 import dev.albertoarenaldev.authservice.repository.UserRepository;
+import dev.albertoarenaldev.authservice.security.JwtProperties;
 import dev.albertoarenaldev.authservice.service.TokenService.TokenPair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -52,19 +58,55 @@ public class AuthService {
     /** Nombre del rol por defecto asignado a todo usuario nuevo. */
     private static final String DEFAULT_ROLE_NAME = "ROLE_USER";
 
+    /** Subject del correo de verificacion. */
+    private static final String VERIFY_EMAIL_SUBJECT = "Verifica tu cuenta";
+
+    /**
+     * Cuerpo del correo de verificacion en texto plano.
+     * %1$s = appName, %2$s = verifyUrl, %3$d = expirationHours.
+     */
+    private static final String VERIFY_EMAIL_BODY = """
+            Hola,
+
+            Gracias por registrarte en %1$s.
+
+            Para activar tu cuenta, haz clic en el siguiente enlace:
+
+            %2$s
+
+            Este enlace expira en %3$d horas.
+
+            Si no has creado esta cuenta, puedes ignorar este mensaje.
+
+            —
+            Equipo %1$s
+            """;
+
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final TokenService tokenService;
     private final PasswordEncoder passwordEncoder;
+    private final EmailVerificationTokenRepository verificationTokenRepository;
+    private final PasswordResetProperties resetProperties;
+    private final long verificationTokenExpirationMs;
+    private final ApplicationEventPublisher eventPublisher;
 
     public AuthService(UserRepository userRepository,
                        RoleRepository roleRepository,
                        TokenService tokenService,
-                       PasswordEncoder passwordEncoder) {
+                       PasswordEncoder passwordEncoder,
+                       EmailVerificationTokenRepository verificationTokenRepository,
+                       PasswordResetProperties resetProperties,
+                       JwtProperties jwtProperties,
+                       ApplicationEventPublisher eventPublisher) {
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
         this.tokenService = tokenService;
         this.passwordEncoder = passwordEncoder;
+        this.verificationTokenRepository = verificationTokenRepository;
+        this.resetProperties = resetProperties;
+        this.verificationTokenExpirationMs = jwtProperties.getEmailVerificationTokenExpirationMs();
+        this.eventPublisher = eventPublisher;
     }
 
     // ============================================================
@@ -72,23 +114,26 @@ public class AuthService {
     // ============================================================
 
     /**
-     * Registra un nuevo usuario con el rol por defecto (ROLE_USER) y emite
-     * el primer par de tokens.
+     * Registra un nuevo usuario con el rol por defecto (ROLE_USER).
      *
-     * <p>Si la BD no tiene el rol (p. ej. primer arranque en un entorno
-     * donde el seed de roles no se ha ejecutado), se crea al vuelo de forma
-     * idempotente. Asi el endpoint funciona incluso en una BD vacia.
+     * <p>La cuenta se crea con {@code enabled = false}: el usuario debe
+     * verificar su email antes de poder autenticarse. Se genera un token
+     * opaco (32 bytes SecureRandom → SHA-256), se persiste en
+     * {@code email_verification_tokens} y se envia por correo de forma
+     * asincrona tras el commit de la transaccion.
      *
+     * <p>No se emiten tokens JWT ni refresh en este punto: el usuario
+     * los recibe al verificar su email via {@link #verifyEmail(String)}.
+     *
+     * @return representacion publica del usuario creado (sin tokens)
      * @throws EmailAlreadyExistsException si el email ya esta registrado
      */
     @Transactional
-    public AuthResponse register(RegisterRequest req) {
+    public UserResponse register(RegisterRequest req) {
         if (userRepository.existsByEmail(req.email())) {
             throw new EmailAlreadyExistsException(req.email());
         }
 
-        // El rol por defecto (ROLE_USER) es creado por DataSeeder al arranque.
-        // Si no existe, es un bug de configuracion (DataSeeder no se ejecuto).
         Role defaultRole = roleRepository.findByName(DEFAULT_ROLE_NAME)
                 .orElseThrow(() -> new IllegalStateException(
                         "Default role " + DEFAULT_ROLE_NAME + " not found. DataSeeder should have created it on startup."));
@@ -98,13 +143,75 @@ public class AuthService {
         user.setPasswordHash(passwordEncoder.encode(req.password()));
         user.setFirstName(req.firstName());
         user.setLastName(req.lastName());
-        user.setEnabled(true);
+        // enabled = false por defecto (ver User.java). El usuario debe
+        // verificar su email antes de poder hacer login.
         user.addRole(defaultRole);
 
         User saved = userRepository.save(user);
-        log.info("Registered new user id={} email={}", saved.getId(), saved.getEmail());
+        log.info("Registered new user id={} email={} (pending email verification)", saved.getId(), saved.getEmail());
 
-        return buildAuthResponse(saved);
+        // Generar token de verificacion y publicar evento para envio de email.
+        // El listener lo consume en el pool emailExecutor tras el commit.
+        generateAndSendVerificationEmail(saved);
+
+        return UserResponse.from(saved);
+    }
+
+    /**
+     * Verifica el email del usuario canjeando el token recibido por correo.
+     *
+     * <p>Flujo:
+     * <ol>
+     *   <li>Hashea el token raw y lo busca en BD.</li>
+     *   <li>Valida que no este expirado ni usado y que el usuario asociado
+     *       exista.</li>
+     *   <li>Marca el token como usado.</li>
+     *   <li>Habilita la cuenta del usuario ({@code enabled = true}).</li>
+     *   <li>Emite el primer par de tokens (access + refresh).</li>
+     * </ol>
+     *
+     * <p>Mensajes de error genericos para evitar ataques de tipo oracle
+     * (el atacante no puede distinguir "token no existe" de "token expirado"
+     * de "token ya usado").
+     *
+     * @param rawToken token en claro del enlace del correo
+     * @return AuthResponse con access + refresh + datos del usuario
+     * @throws InvalidTokenException si el token no existe, expiro o ya se uso
+     */
+    @Transactional
+    public AuthResponse verifyEmail(String rawToken) {
+        String tokenHash = SecureTokenHasher.hashToken(rawToken);
+
+        EmailVerificationToken token = verificationTokenRepository.findByTokenHash(tokenHash)
+                .orElseThrow(() -> {
+                    log.warn("Email verification failed: token not found (hash prefix={})",
+                            tokenHash.substring(0, 8));
+                    return new InvalidTokenException("Invalid or expired verification token");
+                });
+
+        if (token.getUsedAt() != null) {
+            log.warn("Email verification failed: token already used (id={})", token.getId());
+            throw new InvalidTokenException("Invalid or expired verification token");
+        }
+        if (token.getExpiresAt().isBefore(Instant.now())) {
+            log.warn("Email verification failed: token expired (id={})", token.getId());
+            throw new InvalidTokenException("Invalid or expired verification token");
+        }
+
+        User user = token.getUser();
+        if (user == null) {
+            log.warn("Email verification failed: token id={} has no associated user", token.getId());
+            throw new InvalidTokenException("Invalid or expired verification token");
+        }
+
+        token.setUsedAt(Instant.now());
+        verificationTokenRepository.save(token);
+
+        user.setEnabled(true);
+        userRepository.save(user);
+        log.info("Email verified for user id={} email={}", user.getId(), user.getEmail());
+
+        return buildAuthResponse(user);
     }
 
     // ============================================================
@@ -293,5 +400,32 @@ public class AuthService {
         String accessToken = tokenService.generateAccessToken(user);
         String refreshToken = tokenService.generateRefreshToken(user);
         return new AuthResponse(accessToken, refreshToken, UserResponse.from(user));
+    }
+
+    /**
+     * Genera un token de verificacion de email, lo persiste y publica un
+     * evento para el envio asincrono del correo.
+     *
+     * <p>El correo se envia tras el commit de la transaccion (mismo patron
+     * que {@link PasswordResetService#forgotPassword}).
+     */
+    private void generateAndSendVerificationEmail(User user) {
+        String rawToken = SecureTokenHasher.generateRawToken();
+        String tokenHash = SecureTokenHasher.hashToken(rawToken);
+
+        EmailVerificationToken token = new EmailVerificationToken();
+        token.setUser(user);
+        token.setTokenHash(tokenHash);
+        token.setExpiresAt(Instant.now().plusMillis(verificationTokenExpirationMs));
+        verificationTokenRepository.save(token);
+
+        String verifyUrl = resetProperties.getVerificationBaseUrl() + "?token=" + rawToken;
+        long expirationHours = verificationTokenExpirationMs / 3_600_000;
+        String body = String.format(VERIFY_EMAIL_BODY,
+                resetProperties.getAppName(), verifyUrl, expirationHours);
+
+        eventPublisher.publishEvent(new EmailVerificationRequestedEvent(
+                user.getEmail(), VERIFY_EMAIL_SUBJECT, body));
+        log.info("Verification email queued for user id={}", user.getId());
     }
 }
