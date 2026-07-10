@@ -22,8 +22,9 @@ import org.springframework.stereotype.Service;
  *       adjuntos ni templates.</li>
  *   <li>Texto plano es trivialmente entregable y no dispara filtros
  *       anti-spam por inconsistencias HTML/texto.</li>
- *   <li>Para un proyecto portfolio, la simpleza demuestra criterio
- *       senior mejor que over-engineering con plantillas HTML.</li>
+ *   <li>La implementacion directa con JavaMailSender evita dependencias
+ *       adicionales y mantiene la superficie de fallo reducida frente a
+ *       soluciones de terceros.</li>
  * </ul>
  *
  * <p><b>Por que el try/catch engulle la excepcion del SMTP:</b> el

@@ -8,8 +8,8 @@
 [![Branches](https://img.shields.io/badge/branches-89%25-green)](#)
 [![Tests](https://img.shields.io/badge/tests-129%2F129-brightgreen)](#)
 
-> Auth Service — stateless JWT authentication built with Spring Boot 3 + Spring Security 6.
-> Designed as a portfolio project showcasing clean architecture, testable security, and 12-factor config.
+> Stateless JWT authentication microservice built with Spring Boot 3 + Spring Security 6.
+> Clean architecture, testable security, 12-factor config.
 
 ---
 
@@ -91,7 +91,7 @@
 │  JwtAuthenticationEntryPoint                                  │
 │  └─ 401 + JSON body + header WWW-Authenticate: Bearer        │
 │      ↓ si SÍ                                                 │
-│  AuthController (placeholder) → 200                           │
+│  AuthController → 200                           │
 └─────────────────────────────────────────────────────────────┘
 
 Beans inyectados:

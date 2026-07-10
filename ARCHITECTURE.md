@@ -45,9 +45,9 @@ un ADR nuevo que la **supersede**, no se reescribe la historia.
 
 ### Contexto
 
-Necesitábamos un stack moderno para un auth service de portfolio que:
+Necesitábamos un stack moderno para un auth service que:
 
-- Fuera reconocible por reclutadores (Java + Spring es el "default" en backend)
+- Tuviera amplia adopción en la industria y ecosistema maduro de herramientas
 - Tuviera buena ergonomía para security (Spring Security 6 + JWT)
 - Soportara Java moderno (records, pattern matching, virtual threads)
 - Tuviera ecosistema maduro para JWT, JPA, testing
@@ -70,7 +70,7 @@ Necesitábamos un stack moderno para un auth service de portfolio que:
 - Java 21 LTS tiene soporte a largo plazo
 - JJWT 0.12.5 API es limpia (`Jwts.builder().signWith().compact()`)
 - El stack es **100% estándar** — fácil de encontrar devs que lo conozcan
-- Reconocible en portfolio: "sabe Java + Spring + JWT = employable"
+- Stack consolidado: Java + Spring + JWT es la combinación con mayor documentación y ecosistema
 
 **Negativas / trade-offs:**
 - Spring Boot 3 requiere Java 17+ (OK, vamos a 21)
@@ -78,8 +78,8 @@ Necesitábamos un stack moderno para un auth service de portfolio que:
 - Spring Security 6 cambió la API vs 5.x (curva de aprendizaje si vienes de versiones viejas)
 
 **Alternativas consideradas:**
-- **Quarkus + Java 21**: más ligero, pero menos招聘able (Spring es lo que esperan los reclutadores)
-- **Node.js + Express + Passport**: ecosistema JS, pero rompería el "stack Java" del portfolio
+- **Quarkus + Java 21**: más ligero, pero con menor adopción en el ecosistema backend tradicional
+- **Node.js + Express + Passport**: ecosistema JS, pero rompería la consistencia del stack Java
 - **Micronaut**: equilibrio, pero menos conocido
 
 ---
@@ -98,7 +98,7 @@ Para autenticación con JWT hay dos estrategias canónicas:
 | **A — Todo stateless** | JWT | JWT | Simple, sin DB para validar | No puedes revocar tokens hasta que expiren |
 | **B — Híbrido** | JWT | Opaque en DB | Access rápido (sin DB), refresh revocable | Más complejo, refresh hace query a DB |
 
-Para un auth service de portfolio queremos mostrar que sabemos权衡 entre seguridad
+Para un auth service buscamos el equilibrio entre seguridad
 y complejidad, y que entendemos el patrón estándar de la industria (Auth0, Authentik,
 Keycloak lo usan).
 
@@ -156,16 +156,15 @@ Spring Security ofrece varios `PasswordEncoder`s:
 ### Consecuencias
 
 **Positivas:**
-- BCrypt es lo que esperan ver los reclutadores en un portfolio Java
-- Strength 12 = ~250ms por hash en CPU moderna → inaceptable para暴力破解
+- BCrypt es el estándar probado en el ecosistema Java con soporte nativo en Spring Security
+- Strength 12 = ~250ms por hash en CPU moderna → inaceptable para ataques de fuerza bruta
 - Salt automático (cada hash es único aunque el password sea el mismo)
 - Compatible con hashes legacy (migración gradual a Argon2 si se quisiera)
 
 **Negativas / trade-offs:**
 - 250ms por login/register (UX) — aceptable, no perceptible
 - En CPU antigua, podría ser 1-2s. Si pasa, bajar a 10
-- BCrypt trunca passwords a 72 bytes silenciosamente. Para portfolio OK; para
-  enterprise documentar en un FAQ
+- BCrypt trunca passwords a 72 bytes silenciosamente. Para este servicio es aceptable; en un contexto enterprise se documentaría en un runbook
 
 **Por qué no Argon2:**
 - Argon2 es más seguro técnicamente, pero menos conocido en Java
@@ -275,7 +274,7 @@ Spring Boot ecosystem lo usa masivamente (es el default en muchos starters).
 - No necesitas plugin de IDE para Lombok
 - El proyecto se compila con `javac` puro (sin annotation processors)
 - Consistencia con proyecto hermano `gestion-eventos` (mismo autor, misma regla)
-- Mejor para portfolio: muestra que entiendes los fundamentos del lenguaje
+- Mayor transparencia: el código es auto-contenido y no requiere tooling adicional para su comprensión
 
 **Negativas / trade-offs:**
 - ~30% más líneas de código en las entities (User tiene 200 líneas vs ~120 con Lombok)
@@ -337,7 +336,7 @@ La entidad `RefreshToken` tiene un campo `replacedByTokenId` (nullable Long).
 - Detección proactiva de robo de tokens
 - Fuerza al usuario a re-logear si pasa algo raro (visible para ellos)
 - Es el patrón recomendado por OWASP y la industria
-- Diferenciador en entrevistas ("¿cómo manejas el reuso de refresh tokens?")
+- Patrón recomendado por OWASP y utilizado en la industria (Auth0, Keycloak)
 
 **Negativas / trade-offs:**
 - Más complejo que "mismo refresh token siempre"
@@ -346,8 +345,8 @@ La entidad `RefreshToken` tiene un campo `replacedByTokenId` (nullable Long).
 
 **Por qué lo implementamos en V1:**
 - Es un patrón de seguridad crítico que todo dev debería conocer
-- Enseña a diseñar entidades con campos de auditoría
-- Diferenciador fuerte en portfolio
+- Fomenta el diseño de entidades con trazabilidad completa de auditoría
+- Patron OWASP consolidado que demuestra comprension profunda de seguridad en APIs REST
 
 ---
 
@@ -426,7 +425,7 @@ Implementar inicio de sesión social utilizando `spring-boot-starter-oauth2-clie
 - Los tokens viajan como query params en la URL de redirect (patrón estándar SPA, pero visible en browser history).
 
 **Alternativas consideradas:**
-- **Auth0 / Keycloak:** Externalizar completamente la autenticación añadiendo un Identity Provider (IdP) externo. Descartado por ser over-engineering para esta fase del portfolio y quitar protagonismo al código de Spring Security que queremos demostrar.
+- **Auth0 / Keycloak:** Externalizar completamente la autenticación añadiendo un Identity Provider (IdP) externo. Descartado por añadir un servicio externo innecesario para un auth-service autocontenido; Spring Security OAuth2 Client nativo cubre el caso de uso sin dependencias adicionales.
 
 ---
 
@@ -487,7 +486,7 @@ Implementar `Bucket4j` con el algoritmo Token Bucket de forma **in-memory** medi
 
 **Alternativas consideradas:**
 - **Redis-backed Bucket4j:** Comparte el estado en la red. Ideal, pero requiere levantar Redis. Se reserva para una V2 al evolucionar a arquitectura de microservicios con múltiples réplicas.
-- **Rate limiting en API Gateway (nginx/Kong):** Mejor rendimiento general pero saca la lógica del código de aplicación, reduciendo lo que se puede exponer en el portfolio Java.
+- **Rate limiting en API Gateway (nginx/Kong):** Mejor rendimiento general pero externaliza la lógica de control de acceso fuera del código de aplicación.
 
 ---
 
@@ -600,7 +599,6 @@ nuevas, abierto para legacy).
 Qué situación/problema llevó a la decisión. Fuerzas en juego:
 - Tecnológicas
 - De negocio
-- De equipo / portfolio
 - De tiempo
 
 ### Decisión
