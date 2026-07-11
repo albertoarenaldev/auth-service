@@ -416,7 +416,7 @@ mvn -B test -X
 
 **Cobertura actual:**
 
-- **Tests:** 129 / 129 passing · 0 flaky (20 clases: 102 `@Test` + 3 `@ParameterizedTest` expanden los 27 casos restantes)
+- **Tests:** 129 / 129 passing · 0 flaky (17 clases de test)
 - **Line coverage (JaCoCo):** 95% — 362 de 382 lineas cubiertas por los tests
 - **Branch coverage:** 89% — 136 de 152 ramas cubiertas
 - **Class coverage:** 100% — los 40 classes del main tienen al menos un test que invoca su codigo (medicion a nivel de "clase tocada", NO garantiza que todas las lineas o ramas esten ejercitadas; para eso mirar line/branch coverage arriba)

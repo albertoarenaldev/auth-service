@@ -170,12 +170,18 @@ public class AuthController {
      * (exista o no el email en BD) para mitigar user enumeration
      * (OWASP Authentication Cheat Sheet). Si el email existe, el servicio
      * {@link PasswordResetService} genera un token opaco, lo persiste
-     * hasheado (SHA-256) y envia el correo de forma sincrona dentro del
-     * handler (latencia SMTP ~150-250ms en el caso feliz).
+     * hasheado (SHA-256) y publica un evento para el envio asincrono del
+     * correo (ver {@link dev.albertoarenaldev.authservice.service.PasswordResetEventListener}).
      *
-     * <p>El correo nunca se envia a emails no registrados; en ese caso
-     * el servicio registra un evento de auditoria anonimo (prefijo MD5
-     * del email, sin cleartext) y devuelve sin enviar correo. La
+     * <p>El correo se envia de forma <b>asincrona</b> tras el commit
+     * de la transaccion via {@code @Async("emailExecutor")} +
+     * {@code @TransactionalEventListener(phase = AFTER_COMMIT)}.
+     * Esto protege contra DoS (spamming del endpoint no bloquea threads
+     * HTTP esperando al SMTP) y contra timing-based user enumeration
+     * (el request retorna en ~5-15ms independientemente de si el email
+     * existe). El correo nunca se envia a emails no registrados; en ese
+     * caso el servicio registra un evento de auditoria anonimo (prefijo
+     * MD5 del email, sin cleartext) y devuelve sin publicar evento. La
      * diferencia no es visible al cliente.
      *
      * @return 202 Accepted (cuerpo vacio)
@@ -201,13 +207,6 @@ public class AuthController {
      * {@code GlobalExceptionHandler}) con un mensaje generico para no
      * permitir ataques de tipo "oracle" (el atacante no debe poder
      * distinguir las distintas razones del fallo).
-     *
-     * <p><b>Limitacion conocida (Fase 5):</b> tras este cambio, las
-     * sesiones existentes del usuario NO se invalidan automaticamente —
-     * quedan como sesiones validas hasta que el access token JWT expire
-     * (15 min). Una revocacion explicita de los refresh tokens del
-     * usuario seria una defensa en profundidad contra takeover y queda
-     * anotada como follow-up.
      *
      * @return 204 No Content (cuerpo vacio)
      * @throws 400 si el body no pasa la validacion Bean Validation

@@ -57,8 +57,8 @@ import java.util.UUID;
  * token JWT sigue siendo válido hasta su expiración natural (15 min)
  * tras un reset. La {@link TokenService#revokeAllForUser(Long)} sólo
  * invalida refresh tokens — si quisiéramos bloquear el JWT actual
- * sería necesaria una blocklist server-side (Redis), planificada para
- * Fase 7. En la práctica, el atacante con un JWT válido puede seguir
+ * sería necesaria una blocklist server-side (Redis), pendiente para
+ * una futura iteración. En la práctica, el atacante con un JWT válido puede seguir
  * usando el access durante <=15 min, pero el refresh falla y debe
  * re-autenticarse.</p>
  *

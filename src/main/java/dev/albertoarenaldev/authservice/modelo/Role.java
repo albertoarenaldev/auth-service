@@ -10,7 +10,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
 /**
- * Role entity — Roles estáticos (ROLE_USER, ROLE_ADMIN) seedeados vía import.sql.
+ * Role entity — Roles estáticos (ROLE_USER, ROLE_ADMIN) seedeados via
+ * {@link dev.albertoarenaldev.authservice.config.DataSeeder} (CommandLineRunner).
  * No tiene timestamps ni soft delete: si necesitas un rol nuevo, INSERT directo.
  */
 @Entity

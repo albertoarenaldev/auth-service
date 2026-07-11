@@ -11,11 +11,11 @@ import jakarta.validation.constraints.NotBlank;
  * (un atacante no puede distinguir "email registrado" vs "email libre"
  * midiendo respuestas o mensajes).
  *
- * <p>El envio del correo (cuando corresponde) se hace de forma sincrona
- * dentro del handler del request (Fase 5 no introduce {@code @Async}
- * deliberadamente); la latencia del response en el caso feliz es de
- * unos ~150-250ms por el coste del SMTP send. Cuando llegue el rate
- * limiting de Fase 7, podría migrarse a async sin tocar el DTO.
+ * <p>El envio del correo (cuando corresponde) se hace de forma <b>asincrona</b>
+ * tras el commit de la transaccion, via {@code @Async("emailExecutor")} +
+ * {@code @TransactionalEventListener(phase = AFTER_COMMIT)}. Esto protege
+ * contra DoS (el thread HTTP no espera al SMTP) y contra timing-based user
+ * enumeration.
  */
 public record ForgotPasswordRequest(
 
