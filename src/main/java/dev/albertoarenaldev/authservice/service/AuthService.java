@@ -306,11 +306,14 @@ public class AuthService {
     /**
      * Cierra una sesion concreta revocando el refresh token presentado.
      * Es idempotente: si el token no existe o ya estaba revocado, no
-     * lanza excepcion.
+     * lanza excepcion. Registra un evento de auditoria con la IP del
+     * cliente.
      */
     @Transactional
     public void logout(String refreshToken) {
         tokenService.revokeRefreshToken(refreshToken);
+        auditService.record(AuditEventType.LOGOUT, AuditService.getClientIp(),
+                "refresh_token_revoked");
     }
 
     /**
