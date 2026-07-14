@@ -112,6 +112,41 @@ Claims del JWT:
   - roles: ["ROLE_USER", "ROLE_ADMIN", ...]
 ```
 
+### Flujo JWT con Refresh Token Rotation
+
+```mermaid
+sequenceDiagram
+    participant Cliente
+    participant AuthService
+    participant BaseDeDatos
+
+    Note over Cliente,BaseDeDatos: 🔐 Registro y Login
+
+    Cliente->>AuthService: POST /register<br/>{email, password}
+    AuthService->>BaseDeDatos: INSERT user (BCrypt 12)
+    AuthService-->>Cliente: 201 Created + tokens
+
+    Cliente->>AuthService: POST /login<br/>{email, password}
+    AuthService->>BaseDeDatos: SELECT user
+    AuthService->>AuthService: BCrypt.matches()
+    AuthService->>BaseDeDatos: INSERT refresh_token
+    AuthService-->>Cliente: 200 + access(JWT) + refresh(opaco)
+
+    Note over Cliente,BaseDeDatos: 🔄 Refresh Token Rotation
+
+    Cliente->>AuthService: POST /refresh {RT1}
+    AuthService->>BaseDeDatos: SELECT RT1 (válido)
+    AuthService->>BaseDeDatos: INSERT RT2<br/>revoke RT1
+    AuthService-->>Cliente: 200 + nuevo access + RT2
+
+    Note over Cliente,BaseDeDatos: 🚨 Detección de Reuso (token robado)
+
+    Cliente->>AuthService: POST /refresh {RT1}
+    AuthService->>BaseDeDatos: RT1.revokedAt != null ⚠️
+    AuthService->>BaseDeDatos: Revocar TODA la familia
+    AuthService-->>Cliente: 401 + sesión invalidada
+```
+
 **Decisiones de diseño clave:**
 
 - **Access tokens son JWT stateless** (HS256, 15 min default).
